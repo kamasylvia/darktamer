@@ -12,6 +12,10 @@ if(USE_MCP)
   add_subdirectory(mcp)
 endif(USE_MCP)
 
+if(USE_CIRAW)
+  add_subdirectory(imageio)
+endif(USE_CIRAW)
+
 if(USE_LUA)
   add_subdirectory(lua)
 endif(USE_LUA)

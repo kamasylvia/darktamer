@@ -75,10 +75,14 @@ short:
 3. `downloadResourcesWithTimeout:` (10 s) first: camera resources for new
    bodies may need an OTA download. Failure is `UNSUPPORTED_CAMERA` with
    a log line saying the machine needs to go online.
-4. Development knobs neutralized (`_ciraw_neutralize`): every stage at
-   its neutral value except `baselineExposure`, which keeps the filter
-   default. The probe scripts and this list agree exactly; regressions
-   compare against it.
+4. Development knobs split (`_ciraw_neutralize`): the detail stages dt
+   owns (denoise, sharpening, contrast, gamut, lens) stay neutral, the
+   tone/exposure group keeps its Apple defaults (`boostAmount`,
+   `shadowBias`, `highlightRecoveryEnabled`, plus the always-default
+   `baselineExposure`). A zeroed boost is a pure linear response, which
+   the LDR pipe shows unmapped, dark and hazy; the tone curve is what
+   makes first-open brightness sane. The probe scripts and this list
+   agree exactly; regressions compare against it.
 5. `orientation` set to Up, dimensions taken from the resulting
    `outputImage.extent`, not `nativeSize` (whether `nativeSize` includes
    the sensor crop is unverified; the extent always matches the buffer

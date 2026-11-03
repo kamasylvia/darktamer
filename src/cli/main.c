@@ -274,7 +274,11 @@ int main(int argc, char *arg[])
       }
       else if(!strcmp(arg[k], "--version") || !strcmp(arg[k], "-v"))
       {
+#ifdef HAVE_CIRAW
+          printf("darktable %s+ciraw\nCopyright (C) 2012-%s Johannes Hanika and other contributors.\n\n",darktable_package_version, darktable_last_commit_year);
+#else
           printf("darktable %s\nCopyright (C) 2012-%s Johannes Hanika and other contributors.\n\n",darktable_package_version, darktable_last_commit_year);
+#endif
           printf("See %s for detailed documentation.\n", PACKAGE_DOCS);
           printf("See %s to report bugs.\n",PACKAGE_BUGREPORT);
           exit(0);

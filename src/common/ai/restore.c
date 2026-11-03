@@ -430,6 +430,11 @@ dt_restore_sensor_class_t dt_restore_classify_sensor(const dt_image_t *img)
 {
   if(!img || !(img->flags & (DT_IMAGE_RAW | DT_IMAGE_S_RAW)))
     return DT_RESTORE_SENSOR_CLASS_UNSUPPORTED;
+  // Apple RAW: fully developed RGB, no sensor data for either path;
+  // the RAW gate above already rejects these, this is defense in depth
+  // against future flag combinations drifting past it
+  if(dt_image_is_ciraw(img))
+    return DT_RESTORE_SENSOR_CLASS_UNSUPPORTED;
   if(img->flags & (DT_IMAGE_MONOCHROME | DT_IMAGE_MONOCHROME_BAYER))
     return DT_RESTORE_SENSOR_CLASS_UNSUPPORTED;
   if(img->flags & DT_IMAGE_4BAYER)

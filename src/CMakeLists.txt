@@ -1231,6 +1231,17 @@ add_library(lib_darktable_imageio_rawspeed STATIC imageio/imageio_rawspeed.cc)
 target_link_libraries(lib_darktable_imageio_rawspeed PRIVATE rawspeed)
 target_link_libraries(lib_darktable PRIVATE lib_darktable_imageio_rawspeed)
 
+if(USE_CIRAW)
+  add_library(lib_darktable_imageio_ciraw STATIC imageio/imageio_ciraw.mm)
+  # the static lib has no link step of its own, so LINK_FLAGS would never
+  # reach the consumer; PRIVATE link items propagate as LINK_ONLY instead
+  target_link_libraries(lib_darktable_imageio_ciraw PRIVATE
+      "-framework CoreImage" "-framework Metal" "-framework Foundation"
+      "-framework CoreGraphics" "-framework ImageIO")
+  target_link_libraries(lib_darktable PRIVATE lib_darktable_imageio_ciraw)
+  add_definitions(-DHAVE_CIRAW=1)
+endif()
+
 #
 # Install lib_darktable
 #

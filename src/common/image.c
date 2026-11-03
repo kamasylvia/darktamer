@@ -159,6 +159,11 @@ gboolean dt_image_is_ai_denoised(const dt_image_t *img)
   return img && (img->flags & DT_IMAGE_AI_DENOISED);
 }
 
+gboolean dt_image_is_ciraw(const dt_image_t *img)
+{
+  return img && (img->flags & DT_IMAGE_CIRAW);
+}
+
 gboolean dt_image_is_hdr(const dt_image_t *img)
 {
   const char *c = img->filename + strlen(img->filename);

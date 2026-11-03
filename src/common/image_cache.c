@@ -162,7 +162,14 @@ static void _image_cache_allocate(void *data,
     dt_color_harmony_get(entry->key, &img->color_harmony_guide);
 
     // buffer size? colorspace?
-    if(img->flags & DT_IMAGE_LDR)
+    if(img->flags & DT_IMAGE_CIRAW)
+    {
+      // Apple RAW holds developed RGB regardless of the HDR/RAW combination
+      img->buf_dsc.channels = 4;
+      img->buf_dsc.datatype = TYPE_FLOAT;
+      img->buf_dsc.cst = IOP_CS_RGB;
+    }
+    else if(img->flags & DT_IMAGE_LDR)
     {
       img->buf_dsc.channels = 4;
       img->buf_dsc.datatype = TYPE_FLOAT;

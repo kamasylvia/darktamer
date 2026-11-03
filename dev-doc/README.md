@@ -59,6 +59,11 @@ This guide covers building Image Operation (IOP) modules for darktable's darkroo
 |------|-------------|
 | **[New_Module_Guide.md](New_Module_Guide.md)** | Step-by-step guide to creating a new IOP module |
 
+### Image IO
+| File | Description |
+|------|-------------|
+| **[CIRAW_Decoder.md](CIRAW_Decoder.md)** | Apple Core Image RAW v9 as the only raw decoder: the Apple RAW flag, loader contract, wiring, boundaries |
+
 ---
 
 ## Quick Reference

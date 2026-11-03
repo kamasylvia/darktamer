@@ -31,7 +31,8 @@ typedef enum dt_gui_presets_format_flag_t
   FOR_HDR       = 1 << 2,
   FOR_NOT_MONO  = 1 << 3,
   FOR_NOT_COLOR = 1 << 4,
-  FOR_MATRIX    = 1 << 5
+  FOR_MATRIX    = 1 << 5,
+  FOR_CIRAW     = 1 << 6
 } dt_gui_presets_format_flag_t;
 
 enum // Lib and iop presets

@@ -43,8 +43,14 @@ enabling:
 - `dt_image_is_matrix_correction_supported`
 
 With those three false, `rawprepare`, `temperature`, `highlights` and
-`demosaic` stay off by default and the `FOR_RAW|FOR_MATRIX` presets never
-apply. `src/common/image_cache.c` has an explicit CIRAW branch for the
+`demosaic` stay off by default and the raw exposure (+0.7EV) and
+`FOR_MATRIX` (channelmixerrgb) presets never apply. The view transform
+presets (`FOR_RAW|FOR_MATRIX|FOR_CIRAW` on sigmoid, filmicrgb, agx,
+spektrafilm) do apply: `_dev_auto_apply_presets`
+(`src/develop/develop.c`) sets `FOR_CIRAW` (`src/gui/presets.h`, `1 <<
+6`) on CIRAW images, and `dt_presets_get_filter`
+(`src/common/presets.c`) matches it symmetric extension with the matrix rule.
+`src/common/image_cache.c` has an explicit CIRAW branch for the
 `buf_dsc` rebuild (`channels=4`, `TYPE_FLOAT`, `IOP_CS_RGB`); with HDR
 set, the existing HDR non-raw branch would rebuild the same descriptor,
 so the branch is defensive rather than corrective.

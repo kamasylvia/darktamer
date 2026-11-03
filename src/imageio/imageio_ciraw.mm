@@ -52,28 +52,46 @@ static CIContext *_ciraw_shared_context(void)
     return ctx;
   }
 }
-// neutralize every development stage CIRAW would otherwise apply, so the
-// render stays as close to the sensor readout as a developed image gets;
-// baselineExposure deliberately keeps its default (r1-m4), everything
-// else on this list is forced to its neutral value
+// neutralize the detail stages dt owns itself (denoise, sharpening,
+// contrast, gamut, lens), but let Apple present tone: a zeroed boost is
+// a pure linear response, which the LDR pipe shows unmapped, dark and
+// hazy. so the tone/exposure group keeps its Apple v9 defaults (boost
+// 1.0, shadowBias 3.0, highlight recovery on), pinned explicitly so all
+// bodies decode the same way
 static void _ciraw_neutralize(CIRAWFilter *filter)
 {
   @autoreleasepool
   {
-    filter.boostAmount = 0.0f;
+    // restored: default tone curve, without it the frame stays linear-dark
+    filter.boostAmount = 1.0f;
+    // kept neutral: dt owns gamut mapping
     filter.gamutMappingEnabled = NO;
-    filter.highlightRecoveryEnabled = NO;
+    // restored: headroom recovery above the tone curve
+    filter.highlightRecoveryEnabled = YES;
+    // kept neutral: dt's lens module handles correction
     filter.lensCorrectionEnabled = NO;
+    // kept neutral: dt denoises
     filter.luminanceNoiseReductionAmount = 0.0f;
+    // kept neutral: dt denoises
     filter.colorNoiseReductionAmount = 0.0f;
+    // kept neutral: dt sharpens
     filter.sharpnessAmount = 0.0f;
+    // kept neutral: dt sets contrast
     filter.contrastAmount = 0.0f;
+    // kept neutral: dt owns detail
     filter.detailAmount = 0.0f;
+    // kept neutral: dt owns detail
     filter.moireReductionAmount = 0.0f;
+    // kept neutral: dt owns detail
     filter.despeckleAmount = 0.0f;
+    // 0.0 is already the v9 default: nothing to restore
     filter.localToneMapAmount = 0.0f;
+    // kept neutral: 0 EV, the filter default
     filter.exposure = 0.0f;
-    filter.shadowBias = 0.0f;
+    // restored: default shadow lift, part of the tone presentation
+    filter.shadowBias = 3.0f;
+    // kept: not the v9 default (0.0), but full-range output is what the
+    // HDR flag downstream promises
     filter.extendedDynamicRangeAmount = 2.0f;
   }
 }

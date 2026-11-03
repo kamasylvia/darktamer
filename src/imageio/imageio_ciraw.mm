@@ -52,22 +52,24 @@ static CIContext *_ciraw_shared_context(void)
     return ctx;
   }
 }
-// neutralize the detail stages dt owns itself (denoise, sharpening,
-// contrast, gamut, lens), but let Apple present tone: a zeroed boost is
-// a pure linear response, which the LDR pipe shows unmapped, dark and
-// hazy. so the tone/exposure group keeps its Apple v9 defaults (boost
-// 1.0, shadowBias 3.0, highlight recovery on), pinned explicitly so all
-// bodies decode the same way
+// neutralize every development stage dt owns itself, and also the whole
+// tone/exposure group: dt's view transform (sigmoid, filmic, AgX or
+// spektrafilm, auto-applied per workflow) is the only tone presentation,
+// an Apple tone curve plus a dt view transform is two curves in series
+// squeezing the gamut and lifting mid greens and cyans; Apple only
+// decodes, dt presents: only extendedDynamicRangeAmount stays non-zero
+// it is an output range declaration, not a curve, and keeps the HDR
+// headroom the HDR flag downstream promises
 static void _ciraw_neutralize(CIRAWFilter *filter)
 {
   @autoreleasepool
   {
-    // restored: default tone curve, without it the frame stays linear-dark
-    filter.boostAmount = 1.0f;
+    // zeroed: dt's view transform owns the tone curve
+    filter.boostAmount = 0.0f;
     // kept neutral: dt owns gamut mapping
     filter.gamutMappingEnabled = NO;
-    // restored: headroom recovery above the tone curve
-    filter.highlightRecoveryEnabled = YES;
+    // zeroed: headroom recovery is part of the Apple tone presentation
+    filter.highlightRecoveryEnabled = NO;
     // kept neutral: dt's lens module handles correction
     filter.lensCorrectionEnabled = NO;
     // kept neutral: dt denoises
@@ -88,8 +90,8 @@ static void _ciraw_neutralize(CIRAWFilter *filter)
     filter.localToneMapAmount = 0.0f;
     // kept neutral: 0 EV, the filter default
     filter.exposure = 0.0f;
-    // restored: default shadow lift, part of the tone presentation
-    filter.shadowBias = 3.0f;
+    // zeroed: shadow lift is part of the Apple tone presentation
+    filter.shadowBias = 0.0f;
     // kept: not the v9 default (0.0), but full-range output is what the
     // HDR flag downstream promises
     filter.extendedDynamicRangeAmount = 2.0f;

@@ -106,9 +106,9 @@ developed RGB by a sensor matrix. The same pollution source reaches
 `temperature`'s fallback chain, so `_calculate_bogus_daylight_wb`
 returns early on CIRAW images and a manually enabled temperature falls
 back to the preset search instead of deriving coefficients from a DNG
-matrix. `src/common/ai/restore.c` also intercepts CIRAW explicitly: the
-`RAW|S_RAW` gate already rejects it, the added check pins the verdict
-and its message against future flag drift.
+matrix. Neural restore needs no change: its `RAW|S_RAW` gate in
+`src/common/ai/restore.c` already rejects CIRAW images (neither bit is
+set) with a clean unsupported verdict.
 
 ## The wiring
 
@@ -141,8 +141,10 @@ under `HAVE_CIRAW`: camera names come straight from EXIF.
   be a bug scenario: every legitimate path in a CIRAW build either
   decodes or terminates in the fallback chain.
 - HDR merge refuses CIRAW images twice, with two messages: the pre-check
-  (`src/control/jobs/control_jobs.c`) rejects non-raw, the authority
-  rejects non-CFA buffers. Both fire on CIRAW.
+  ("HDR merge aborted: ... is not a raw exposure",
+  `src/control/jobs/control_jobs.c:714`) rejects non-raw, the authority
+  ("exposure bracketing only works on raw images.", `:561`) rejects
+  non-CFA buffers. Both fire on CIRAW.
 - The tiff extension gate (`src/imageio/imageio_tiff.c`: non-`.tif`
   returns `UNSUPPORTED_FORMAT`) is what keeps the else branch safe: a
   raw file landing there fails the tiff attempt instead of being
@@ -150,16 +152,18 @@ under `HAVE_CIRAW`: camera names come straight from EXIF.
   tiff path by design.
 - Manually enabling `temperature` on a DNG-backed CIRAW image used to
   derive white balance from the DNG sensor matrix; the guard in
-  `_calculate_bogus_daylight_wb` now forces the sRGB-neutral fallback.
-  The manual enable itself is still allowed, and still meaningless on
-  developed pixels.
+  `_calculate_bogus_daylight_wb` now forces the preset search (falling
+  back to hardcoded coefficients when no preset matches). The manual
+  enable itself is still allowed, and still meaningless on developed
+  pixels.
 - `makermodel` is not normalized (`main.cameras` groups raw EXIF names,
   so "SONY" and "Sony" split), and `wb_presets` exact matching misses
   more often, falling back to hardcoded coefficients. Both only matter
   with `temperature` manually enabled, which is off by default.
 - `temperature` and `highlights` force-off on CIRAW history replay, with
   the standard "disabled as not appropriate" trouble message. The stored
-  rows are untouched.
+  rows are untouched. A manually enabled `highlights` still runs, but
+  commit clamps it to CLIP mode on any non-raw (`src/iop/highlights.c`).
 - Flag lifetime: `DT_IMAGE_CIRAW` is written on first decode; until
   then, import tags raw extensions `DT_IMAGE_RAW`, so thumbnail-only
   browsing (embedded JPEG, no decode) shows the raw badge and matches
@@ -208,9 +212,11 @@ integration suite's `mire1.cr2`.
 The pixel integration suite (`src/tests/integration`, dE < 2 against
 Bayer references) cannot pass on a CIRAW build: developed RGB through
 an sRGB-neutral pipeline and sensor data through the raw pipeline are
-different images by design. `src/tests/integration/run` refuses to run
-under a CIRAW binary (exit 77, "not applicable" rather than failure),
-detected through the `+ciraw` version suffix; the select script
+different images by design. The integration workflow
+(`.github/workflows/integration.yml`) skips the suite when
+`darktable-cli --version` carries the `+ciraw` suffix (exit 0, "does
+not apply" rather than failure); the select script
 (`.ci/integration-select.py`) additionally maps the CIRAW-only file set
 to no tests, so CIRAW-only changes select nothing even before the
-runner exists.
+runner exists. `run` itself has no guard: it lives in the integration
+submodule and stays untouched.

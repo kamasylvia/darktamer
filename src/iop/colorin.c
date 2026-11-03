@@ -2136,6 +2136,10 @@ corrupted_profile:
     d->type = DT_COLORSPACE_ADOBERGB;
   else if(dt_image_is_ldr(img))
     d->type = DT_COLORSPACE_SRGB;
+#ifdef HAVE_CIRAW
+  else if(dt_image_is_ciraw(img)) // Apple RAW: developed RGB, Rec709 primaries
+    d->type = DT_COLORSPACE_LIN_REC709;
+#endif
   else if(dt_is_valid_colormatrix(img->d65_color_matrix[0])) // image is DNG, EXR, or RGBE
     d->type = DT_COLORSPACE_EMBEDDED_MATRIX;
   else if(dt_is_valid_colormatrix(self->dev->image_storage.dng_forward_matrix[0])) // DNG with forward matrix

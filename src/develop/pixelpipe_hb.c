@@ -629,6 +629,12 @@ static void _dev_pixelpipe_synch(dt_dev_pixelpipe_t *pipe,
       {
         if(!rawprep_img && active) piece->enabled = FALSE;
       }
+      else if(dt_iop_module_is(piece->module, "temperature")
+              || dt_iop_module_is(piece->module, "highlights"))
+      {
+        if(!rawprep_img && active && dt_image_is_ciraw(img))
+          piece->enabled = FALSE;
+      }
 
       if(piece->enabled != hist->enabled)
       {

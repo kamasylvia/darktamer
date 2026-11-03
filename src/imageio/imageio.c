@@ -69,6 +69,10 @@
 #include "imageio/imageio_libraw.h"
 #endif
 
+#ifdef HAVE_CIRAW
+#include "imageio/imageio_ciraw.h"
+#endif
+
 #ifdef HAVE_GRAPHICSMAGICK
 #include "imageio/imageio_gm.h"
 #include <magick/api.h>
@@ -602,9 +606,31 @@ static dt_imageio_retval_t _try_open_as_tiff_on_failure_fallback_to_rawspeed
   return ret;
 }
 
+#ifdef HAVE_CIRAW
+static gboolean _should_decode_ciraw(const char *filename)
+{
+  const char *ext = strrchr(filename, '.');
+  if(!ext) return FALSE;
+  ext++;
+  // dng is deliberately absent from _supported_raw[] (imageio.c:515),
+  // so the extension list alone misses it
+  if(!g_ascii_strcasecmp(ext, "dng")) return TRUE;
+  return dt_imageio_is_raw_by_extension(ext);
+}
+#endif
+
 static dt_imageio_retval_t _open_by_magic_number(dt_image_t *img, const char *filename, dt_mipmap_buffer_t *buf)
 {
   const dt_magic_bytes_t *sig = _find_signature(filename);
+#ifdef HAVE_CIRAW
+  // CIRAW is the only raw decoder in this build: raw signatures never
+  // reach their upstream loader, everything raw goes to the fallback
+  if(sig && sig->loader && _should_decode_ciraw(filename)
+     && (sig->loader == dt_imageio_open_rawspeed
+         || sig->loader == dt_imageio_open_libraw
+         || sig->loader == _try_open_as_tiff_on_failure_fallback_to_rawspeed))
+    return DT_IMAGEIO_UNRECOGNIZED;
+#endif
   if(sig && sig->loader)
     return sig->loader(img, filename, buf);
   return DT_IMAGEIO_UNRECOGNIZED;
@@ -1645,6 +1671,40 @@ dt_imageio_retval_t dt_imageio_open(dt_image_t *img,
   // or the main loader has rejected the file (UNSUPPORTED_FORMAT)
   if((ret == DT_IMAGEIO_UNRECOGNIZED) || (ret == DT_IMAGEIO_UNSUPPORTED_FORMAT))
   {
+#ifdef HAVE_CIRAW
+    if(_should_decode_ciraw(filename))
+    {
+      // CIRAW is the ONLY raw decoder in this build: no tiff attempt,
+      // no rawspeed, no libraw, no exotic fallback for raw targets -
+      // falling through could let GraphicsMagick decode an embedded
+      // preview as if it were the image
+      ret = dt_imageio_open_ciraw(img, filename, buf);
+      // keep UNSUPPORTED_CAMERA (not in _image_handled, darkroom.c
+      // gives a different message than UNSUPPORTED_FORMAT);
+      // normalize only the other unhandled outcomes to terminal FORMAT
+      if(!_image_handled(ret) && ret != DT_IMAGEIO_UNSUPPORTED_CAMERA)
+        ret = DT_IMAGEIO_UNSUPPORTED_FORMAT;
+    }
+    else if(!_image_handled(ret))
+    {
+      // non-raw targets keep the upstream tiff attempt + exotic rescue
+      // + terminal line only: classic TIFF (generic signature loader=NULL)
+      // and direct-loader UNSUPPORTED_FORMAT files reach here.
+      // rawspeed/libraw segments deliberately NOT kept: in this build raw
+      // targets are already claimed by _should_decode_ciraw above, so
+      // those two segments have nothing legitimate to act on
+      if(dt_imageio_is_ldr(filename))
+        ret = dt_imageio_open_tiff(img, filename, buf);
+
+      // final fallback that tries to open file via GraphicsMagick or ImageMagick
+      if(!_image_handled(ret))
+        ret = dt_imageio_open_exotic(img, filename, buf);
+
+      //  if nothing succeeded, declare the image format unsupported
+      if(!_image_handled(ret))
+        ret = DT_IMAGEIO_UNSUPPORTED_FORMAT;
+    }
+#else
     // special case - most camera RAW files are TIFF containers, so if we have an LDR file extension,
     // try loading the file as TIFF
     if(dt_imageio_is_ldr(filename))
@@ -1665,6 +1725,7 @@ dt_imageio_retval_t dt_imageio_open(dt_image_t *img,
     //  if nothing succeeded, declare the image format unsupported
     if(!_image_handled(ret))
       ret = DT_IMAGEIO_UNSUPPORTED_FORMAT;
+#endif
   }
 
   if((ret == DT_IMAGEIO_OK) && !was_hdr && (img->flags & DT_IMAGE_HDR))
@@ -1688,6 +1749,13 @@ gboolean dt_imageio_lookup_makermodel(const char *maker,
                                       char *al,
                                       const int al_len)
 {
+#ifdef HAVE_CIRAW
+  // CIRAW builds have no rawspeed/libraw alias tables: camera names stay
+  // as EXIF reports them
+  (void)maker; (void)model;
+  (void)mk; (void)mk_len; (void)md; (void)md_len; (void)al; (void)al_len;
+  return FALSE;
+#else
   // At this stage, we can't tell which loader is used to open the image.
   gboolean found = dt_rawspeed_lookup_makermodel(maker, model,
                                                  mk, mk_len,
@@ -1706,6 +1774,7 @@ gboolean dt_imageio_lookup_makermodel(const char *maker,
 #endif
 
   return found;
+#endif
 }
 
 typedef struct _imageio_preview_t

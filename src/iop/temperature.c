@@ -1466,6 +1466,11 @@ void gui_update(dt_iop_module_t *self)
 
 static gboolean _calculate_bogus_daylight_wb(dt_iop_module_t *self, double bwb[4])
 {
+#ifdef HAVE_CIRAW
+  // Apple RAW holds developed RGB: a DNG camera matrix must never feed WB
+  if(dt_image_is_ciraw(&self->dev->image_storage))
+    return TRUE;
+#endif
   if(!dt_image_is_matrix_correction_supported(&self->dev->image_storage))
   {
     bwb[0] = 1.0;

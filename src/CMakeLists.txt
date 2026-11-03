@@ -1235,8 +1235,11 @@ if(USE_CIRAW)
   add_library(lib_darktable_imageio_ciraw STATIC imageio/imageio_ciraw.mm)
   # the static lib has no link step of its own, so LINK_FLAGS would never
   # reach the consumer; PRIVATE link items propagate as LINK_ONLY instead
+  # CoreImage is weak-linked: CIRAWDecoderVersion9 only exists on macOS 27,
+  # and a strong reference would abort pre-27 systems in dyld at startup;
+  # the loader only calls these symbols behind @available guards
   target_link_libraries(lib_darktable_imageio_ciraw PRIVATE
-      "-framework CoreImage" "-framework Metal" "-framework Foundation"
+      "-weak_framework CoreImage" "-framework Metal" "-framework Foundation"
       "-framework CoreGraphics" "-framework ImageIO")
   target_link_libraries(lib_darktable PRIVATE lib_darktable_imageio_ciraw)
   add_definitions(-DHAVE_CIRAW=1)

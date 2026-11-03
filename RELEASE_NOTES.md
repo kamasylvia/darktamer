@@ -351,6 +351,13 @@ changes (where available).
 
 ## Other Changes
 
+- An experimental Apple-only build option, `--enable-ciraw`, decodes
+  raw files through Apple Core Image RAW v9 instead of RawSpeed and
+  LibRaw. Supported cameras (69 bodies on the v9 list) open as a new
+  "Apple RAW" image kind: already-developed RGB, without demosaic,
+  white balance or raw exposure controls. Cameras outside the list
+  fail to open with an explicit unsupported-camera message.
+
 - AgX and sigmoid now adapt to HDR output, so one edit exports to
   SDR, HLG and PQ alike. HLG output peaks at 1000 nits, and PQ output
   at the new "PQ peak" setting of the export module, 1000 nits by

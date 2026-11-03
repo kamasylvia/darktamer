@@ -220,44 +220,42 @@ dt_imageio_retval_t dt_imageio_open_ciraw(dt_image_t *img, const char *filename,
     }
 
     dt_imageio_retval_t ret = DT_IMAGEIO_OK;
-    pthread_mutex_lock(&ciraw_context_lock);
+    // probe-verified: concurrent renders on the shared context stay
+    // bit-identical, so only the context fetch above takes the lock
+    const size_t rowbytes = (size_t)width * 4 * sizeof(float);
+    CIRenderDestination *dest =
+        [[CIRenderDestination alloc] initWithBitmapData:buf
+                                                  width:(NSUInteger)width
+                                                 height:(NSUInteger)height
+                                            bytesPerRow:rowbytes
+                                                 format:kCIFormatRGBAf];
+    dest.colorSpace = cs;
+    // dt buffers run top-down, Core Image destinations bottom-up
+    dest.flipped = YES;
+    // alpha channel carries nothing, keep it out of the blend
+    dest.alphaMode = CIRenderDestinationAlphaNone;
+    NSError *err = nil;
+    CIRenderTask *task = [ctx startTaskToRender:out
+                                      fromRect:extent
+                                   toDestination:dest
+                                         atPoint:CGPointZero
+                                           error:&err];
+    if(task == nil)
     {
-      const size_t rowbytes = (size_t)width * 4 * sizeof(float);
-      CIRenderDestination *dest =
-          [[CIRenderDestination alloc] initWithBitmapData:buf
-                                                    width:(NSUInteger)width
-                                                   height:(NSUInteger)height
-                                              bytesPerRow:rowbytes
-                                                   format:kCIFormatRGBAf];
-      dest.colorSpace = cs;
-      // dt buffers run top-down, Core Image destinations bottom-up
-      dest.flipped = YES;
-      // alpha channel carries nothing, keep it out of the blend
-      dest.alphaMode = CIRenderDestinationAlphaNone;
-      NSError *err = nil;
-      CIRenderTask *task = [ctx startTaskToRender:out
-                                        fromRect:extent
-                                     toDestination:dest
-                                           atPoint:CGPointZero
-                                             error:&err];
-      if(task == nil)
+      dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] `%s': render failed to start (%s)",
+               img->filename, err != nil ? [[err localizedDescription] UTF8String] : "no error");
+      ret = DT_IMAGEIO_LOAD_FAILED;
+    }
+    else
+    {
+      [task waitUntilCompletedAndReturnError:&err];
+      if(err != nil)
       {
-        dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] `%s': render failed to start (%s)",
-                 img->filename, err != nil ? [[err localizedDescription] UTF8String] : "no error");
+        dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] `%s': render failed (%s)",
+                 img->filename, [[err localizedDescription] UTF8String]);
         ret = DT_IMAGEIO_LOAD_FAILED;
       }
-      else
-      {
-        [task waitUntilCompletedAndReturnError:&err];
-        if(err != nil)
-        {
-          dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] `%s': render failed (%s)",
-                   img->filename, [[err localizedDescription] UTF8String]);
-          ret = DT_IMAGEIO_LOAD_FAILED;
-        }
-      }
     }
-    pthread_mutex_unlock(&ciraw_context_lock);
     CGColorSpaceRelease(cs);
     if(ret != DT_IMAGEIO_OK)
       return ret;

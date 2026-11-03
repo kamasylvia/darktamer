@@ -80,6 +80,11 @@ INCLUDED_BY = [
   (r"^src/iop/hlreconstruct/", "highlights"),
   (r"^src/iop/ashift_[^/]*$", "ashift"),
 ]
+# files only a CIRAW build compiles or reads: the loader and its unit
+# tests. They cannot change what the CI build (which never enables
+# USE_CIRAW) renders, so they select nothing on their own
+CIRAW_ONLY = r"^(src/imageio/imageio_ciraw\.(mm|h)$" \
+            r"|src/tests/unittests/imageio/)"
 # no visible effect on the pixels of darktable-cli's output
 NO_PIXELS = r"^(src/(libs|views|gui|dtgtk|bauhaus|lua|tests/unittests|osx|win|mcp)/|src/main\.c$" \
             r"|po/|doc/|data/(themes|lua|pixmaps|style|watermarks|latex|pswp)/|tools/|packaging/)" \
@@ -101,6 +106,8 @@ def modules_of(path):
 selected, reasons, everything = set(), [], None
 for path in changed:
   if re.search(NO_PIXELS, path):
+    continue
+  if re.search(CIRAW_ONLY, path):
     continue
   ops = modules_of(path)
   if ops and not any(op in uses for op in ops):

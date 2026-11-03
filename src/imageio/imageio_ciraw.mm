@@ -53,13 +53,14 @@ static CIContext *_ciraw_shared_context(void)
   }
 }
 // neutralize every development stage dt owns itself, and also the whole
-// tone/exposure group: dt's view transform (sigmoid, filmic, AgX or
-// spektrafilm, auto-applied per workflow) is the only tone presentation,
-// an Apple tone curve plus a dt view transform is two curves in series
-// squeezing the gamut and lifting mid greens and cyans; Apple only
-// decodes, dt presents: only extendedDynamicRangeAmount stays non-zero
-// it is an output range declaration, not a curve, and keeps the HDR
-// headroom the HDR flag downstream promises
+// tone/exposure group (boost/shadowBias): dt's view transform (sigmoid,
+// filmic, AgX or spektrafilm, auto-applied per workflow) is the only tone
+// presentation, an Apple tone curve plus a dt view transform is two curves
+// in series squeezing the gamut and lifting mid greens and cyans; Apple
+// only decodes, dt presents: only extendedDynamicRangeAmount stays non-zero
+// (an output range declaration, not a curve, keeps the HDR headroom the HDR
+// flag downstream promises) and highlight recovery stays on (superwhite hue
+// reconstruction, not a curve: see the knob comment below)
 static void _ciraw_neutralize(CIRAWFilter *filter)
 {
   @autoreleasepool
@@ -68,8 +69,12 @@ static void _ciraw_neutralize(CIRAWFilter *filter)
     filter.boostAmount = 0.0f;
     // kept neutral: dt owns gamut mapping
     filter.gamutMappingEnabled = NO;
-    // zeroed: headroom recovery is part of the Apple tone presentation
-    filter.highlightRecoveryEnabled = NO;
+    // kept: NOT a tone curve knob, it reconstructs hue in clipped superwhite
+    // data before EDR range mapping; without it over-range channels saturate
+    // unevenly and the dt highlights module never sees developed-RGB whites,
+    // so highlights render magenta (batch-9 probe hr.mm: H0 R/B 1.268,
+    // magenta-frac 2.08% -> H1 R/B 1.197, magenta-frac 0.00%)
+    filter.highlightRecoveryEnabled = YES;
     // kept neutral: dt's lens module handles correction
     filter.lensCorrectionEnabled = NO;
     // kept neutral: dt denoises

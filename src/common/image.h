@@ -106,6 +106,9 @@ typedef enum
   DT_IMAGE_AI_DENOISED = 1 << 21,
   // set when Lr import has been applied to this image.
   DT_IMAGE_FOREIGN_XMP_APPLIED = 1 << 22,
+  // produced by an Apple Core Image RAW decode: fully developed RGB,
+  // no sensor data and no camera matrix
+  DT_IMAGE_CIRAW = 1 << 23,
 } dt_image_flags_t;
 
 typedef enum dt_image_colorspace_t
@@ -220,7 +223,8 @@ typedef enum dt_image_loader_t
   LOADER_WEBP     = 15,
   LOADER_JPEGXL   = 16,
   LOADER_QOI      = 17,
-  LOADER_COUNT    = 18 // keep last
+  LOADER_CIRAW    = 18,
+  LOADER_COUNT    = 19 // keep last
 } dt_image_loader_t;
 
 static const struct
@@ -246,7 +250,8 @@ static const struct
   { N_("LibRaw"),          'l'},
   { N_("WebP"),            'w'},
   { N_("JPEG XL"),         'L'},
-  { N_("QOI"),             'q'}
+  { N_("QOI"),             'q'},
+  { N_("Apple RAW"),       'A'}
 };
 
 // flags which can be passed via jobs
@@ -423,6 +428,9 @@ gboolean dt_image_is_rawprepare_supported(const dt_image_t *img);
 /** returns TRUE if the image is the output of AI raw denoise, so
  * denoising it again would be a second pass over denoised data */
 gboolean dt_image_is_ai_denoised(const dt_image_t *img);
+/** returns TRUE if the image was decoded by Apple Core Image RAW,
+ * so it holds developed RGB instead of sensor data */
+gboolean dt_image_is_ciraw(const dt_image_t *img);
 
 /** returns the bitmask containing info about monochrome images */
 int dt_image_monochrome_flags(const dt_image_t *img);

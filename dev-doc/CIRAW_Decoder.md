@@ -83,12 +83,16 @@ short:
    a log line saying the machine needs to go online.
 4. Development knobs split (`_ciraw_neutralize`): every stage dt owns
    (denoise, sharpening, contrast, gamut, lens) stays neutral, and so
-   does the whole tone/exposure group (`boostAmount`,
-   `shadowBias`, `highlightRecoveryEnabled` all zeroed/off). dt's view
-   transform is the only tone presentation; an Apple tone curve plus a
-   dt view transform is two curves in series, squeezing the gamut and
-   lifting mid greens and cyans. Apple only decodes, dt presents.
-   Only `extendedDynamicRangeAmount` stays non-zero (2.0): an output
+   does the tone curve group (`boostAmount`, `shadowBias` zeroed).
+   `highlightRecoveryEnabled` is the exception and stays on: it is
+   out-of-range hue reconstruction, not a curve, and dt's highlights
+   module never sees developed-RGB whites, so disabling it renders
+   highlights magenta (batch-9 probe hr.mm: H0 R/B 1.268 with 2.08%
+   magenta pixels -> H1 R/B 1.197 with 0.00%). dt's view transform
+   is the only tone presentation; an Apple tone curve plus a dt view
+   transform is two curves in series, squeezing the gamut and lifting
+   mid greens and cyans. Apple only decodes, dt presents. Only
+   `extendedDynamicRangeAmount` stays non-zero (2.0): an output
    range declaration, not a curve, keeping the HDR headroom. The probe
    scripts and this list agree exactly; regressions compare against it.
 5. `orientation` set to Up, dimensions taken from the resulting

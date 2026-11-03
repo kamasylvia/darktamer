@@ -259,7 +259,7 @@ void init_presets(dt_iop_module_so_t *self)
                                DEVELOP_BLEND_CS_RGB_SCENE);
 
     dt_gui_presets_update_format(BUILTIN_PRESET("scene-referred default"),
-                                 self->op, self->version(), FOR_RAW | FOR_MATRIX);
+                                 self->op, self->version(), FOR_RAW | FOR_MATRIX | FOR_CIRAW);
 
     dt_gui_presets_update_autoapply(BUILTIN_PRESET("scene-referred default"),
                                     self->op, self->version(), TRUE);

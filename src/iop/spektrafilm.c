@@ -4712,7 +4712,8 @@ void init_presets(dt_iop_module_so_t *self)
      Defaults, with no stock named: film_hash 0 resolves to the pack's first
      filming stock, which keeps the preset working whatever pack is installed.
      FOR_RAW | FOR_MATRIX matches the other view transforms -- a scene-referred
-     starting point needs a camera the input profile can place. */
+     starting point needs a camera the input profile can place. FOR_CIRAW extends
+     the same preset to CIRAW images, whose developed RGB also needs a view transform. */
   const char *workflow = dt_conf_get_string_const("plugins/darkroom/workflow");
   if(!g_strcmp0(workflow, "scene-referred (spektrafilm)"))
   {
@@ -4729,7 +4730,7 @@ void init_presets(dt_iop_module_so_t *self)
                                DEVELOP_BLEND_CS_RGB_SCENE);
     dt_gui_presets_update_format(BUILTIN_PRESET("scene-referred default"),
                                  self->op, self->version(),
-                                 FOR_RAW | FOR_MATRIX);
+                                 FOR_RAW | FOR_MATRIX | FOR_CIRAW);
     dt_gui_presets_update_autoapply(BUILTIN_PRESET("scene-referred default"),
                                     self->op, self->version(), TRUE);
   }

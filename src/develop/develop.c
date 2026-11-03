@@ -2149,6 +2149,9 @@ static gboolean _dev_auto_apply_presets(dt_develop_t *dev)
   else
     iformat |= FOR_LDR;
 
+  if(dt_image_is_ciraw(image))
+    iformat |= FOR_CIRAW;
+
   if(has_matrix)
     iformat |= FOR_MATRIX;
 

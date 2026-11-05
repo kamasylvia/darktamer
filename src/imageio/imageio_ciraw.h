@@ -26,6 +26,11 @@ G_BEGIN_DECLS
 dt_imageio_retval_t dt_imageio_open_ciraw(dt_image_t *img, const char *filename,
                                           dt_mipmap_buffer_t *buf);
 
+// spawn the background kernel warmup (no-op on systems without CIRAW
+// support): decodes a few library images at thumbnail scale so the
+// first interactive decode does not pay the one-time Metal build
+void dt_ciraw_warmup_start(void);
+
 G_END_DECLS
 
 // clang-format off

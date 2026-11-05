@@ -24,10 +24,13 @@
 #import <Metal/Metal.h>
 
 #include "common/darktable.h"
+#include "common/database.h"
 #include "common/exif.h"
 #include "common/image.h"
 #include "common/mipmap_cache.h"
 #include "imageio/imageio_ciraw.h"
+
+#include <sqlite3.h>
 
 #include <glib.h>
 
@@ -51,6 +54,51 @@ static CIContext *_ciraw_shared_context(void)
     pthread_mutex_unlock(&ciraw_context_lock);
     return ctx;
   }
+}
+
+static CIRAWDecoderVersion _ciraw_pick_version(CIRAWFilter *filter, NSString *path)
+{
+  // newest decoder the camera offers: v9/v9DNG when listed, otherwise
+  // the highest legacy version. The v9 class-level list contains entries
+  // whose names never match a real body's EXIF model string ("Sony Alpha
+  // ILCE-7R V" vs EXIF "ILCE-7RM5"), so per-file supportedDecoderVersions
+  // omits v9 for them and hard-requiring v9 would keep those bodies
+  // unusable; falling back keeps the decode inside the CIRAW pipeline.
+  // nil means the camera offers no CIRAW decoder version at all
+  NSArray<CIRAWDecoderVersion> *versions = filter.supportedDecoderVersions;
+  CIRAWDecoderVersion want = nil;
+  if(@available(macOS 27.0, *))
+  {
+    if([versions containsObject:CIRAWDecoderVersion9])
+      want = CIRAWDecoderVersion9;
+    else if([versions containsObject:CIRAWDecoderVersion9DNG])
+      want = CIRAWDecoderVersion9DNG;
+  }
+  if(want == nil)
+  {
+    // legacy picks come in two flavors, "8" and "8.dng"; a DNG must get
+    // the .dng flavor (measured 30% mean deviation when it does not) and
+    // a non-DNG the plain one, so filter by flavor first and take the
+    // highest version within it
+    NSString *ext = [path lowercaseString];
+    const BOOL wants_dng_flavor = [ext hasSuffix:@".dng"];
+    int best = -1;
+    for(int pass = 0; pass < 2 && want == nil; pass++)
+    {
+      for(NSString *v in versions)
+      {
+        if(pass == 0 && [v hasSuffix:@".dng"] != (BOOL)wants_dng_flavor)
+          continue;
+        const int n = [v intValue];
+        if(n > best)
+        {
+          best = n;
+          want = v;
+        }
+      }
+    }
+  }
+  return want;
 }
 // neutralize every development stage dt owns itself, and also the whole
 // tone/exposure group (boost/shadowBias): dt's view transform (sigmoid,
@@ -134,22 +182,25 @@ dt_imageio_retval_t dt_imageio_open_ciraw(dt_image_t *img, const char *filename,
     if(filter == nil)
       return DT_IMAGEIO_UNSUPPORTED_FORMAT;
 
-    // force v9, never downgrade: a camera outside the v9 list is an error
-    NSArray<CIRAWDecoderVersion> *versions = filter.supportedDecoderVersions;
-    CIRAWDecoderVersion want = nil;
-    if(@available(macOS 27.0, *))
-    {
-      if([versions containsObject:CIRAWDecoderVersion9])
-        want = CIRAWDecoderVersion9;
-      else if([versions containsObject:CIRAWDecoderVersion9DNG])
-        want = CIRAWDecoderVersion9DNG;
-    }
+    // newest decoder the camera offers: v9/v9DNG when listed, otherwise
+    // the highest legacy version. The v9 class-level list contains
+    // entries whose names never match a real body's EXIF model string
+    // ("Sony Alpha ILCE-7R V" vs EXIF "ILCE-7RM5"), so per-file
+    // supportedDecoderVersions omits v9 for them and hard-requiring v9
+    // would keep those bodies unusable. Falling back keeps the decode
+    // inside the CIRAW pipeline (same neutralize + dt view transform);
+    // same-knobs v8/v9 dual decodes match within ~1.5% on channel means
+    // (dev-doc/CIRAW_Decoder.md, "Coverage and fallback")
+    CIRAWDecoderVersion want = _ciraw_pick_version(filter, path);
     if(want == nil)
     {
-      dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] `%s': camera not in the CIRAW v9 list",
+      dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] `%s': camera offers no CIRAW decoder version",
                img->filename);
       return DT_IMAGEIO_UNSUPPORTED_CAMERA;
     }
+    if([want intValue] < 9)
+      dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] `%s': camera not on the v9 list, decoding with v%d",
+               img->filename, [want intValue]);
     filter.decoderVersion = want;
 
     // camera resources for newly released bodies may need an OTA download
@@ -296,6 +347,122 @@ dt_imageio_retval_t dt_imageio_open_ciraw(dt_image_t *img, const char *filename,
 
     return DT_IMAGEIO_OK;
   }
+}
+
+// render one small frame with the given decoder version; records the
+// version in seen[] when new. returns TRUE when a version got warmed
+static gboolean _ciraw_warm_version(CIContext *ctx, int *seen, int *nseen,
+                                    CIRAWFilter *f, CIRAWDecoderVersion want,
+                                    const char *path)
+{
+  @autoreleasepool
+  {
+    const int ver = [want intValue];
+    for(int i = 0; i < *nseen; i++)
+      if(seen[i] == ver) return FALSE;
+    if(*nseen >= 8) return FALSE;
+    f.decoderVersion = want;
+    CIImage *out = f.outputImage;
+    if(out == nil) return FALSE;
+    CGRect ext = out.extent;
+    const CGFloat scale = 2048.0 / MAX(ext.size.width, ext.size.height);
+    CIImage *scaled = [out imageByApplyingTransform:
+      CGAffineTransformMakeScale(scale, scale)];
+    ext = scaled.extent;
+    const size_t w = (size_t)CGRectGetWidth(ext), h = (size_t)CGRectGetHeight(ext);
+    NSMutableData *buf = [NSMutableData dataWithLength:w * h * 4 * sizeof(float)];
+    if(buf == NULL) return FALSE;
+    CIRenderDestination *dest = [[CIRenderDestination alloc]
+      initWithBitmapData:buf.mutableBytes width:w height:h
+      bytesPerRow:w * 4 * sizeof(float) format:kCIFormatRGBAf];
+    CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
+    dest.colorSpace = cs;
+    CGColorSpaceRelease(cs);
+    dest.flipped = YES;
+    dest.alphaMode = CIRenderDestinationAlphaNone;
+    NSError *err = nil;
+    CIRenderTask *task = [ctx startTaskToRender:scaled fromRect:ext
+                                  toDestination:dest atPoint:CGPointZero
+                                          error:&err];
+    if(task == nil) return FALSE;
+    [task waitUntilCompletedAndReturnError:&err];
+    seen[(*nseen)++] = ver;
+    dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] warmup decode `%s' with v%d done (%d/2)",
+             path, ver, *nseen);
+    return TRUE;
+  }
+}
+
+// the first decode after launch pays a one-time CoreImage Metal kernel
+// build, 30-50s per decoder pipeline on this machine, which would land on
+// the first image the user opens. Warm the pipelines in the background
+// with a small decode each, stopping once two distinct decoder versions
+// have rendered; later decodes cost ~1s
+static void *_ciraw_warmup_thread(void *arg)
+{
+  @autoreleasepool
+  {
+    if(@available(macOS 27.0, *))
+    {
+    }
+    else
+      return NULL;
+    sqlite3 *db = dt_database_get(darktable.db);
+    if(db == NULL) return NULL;
+    sqlite3_stmt *stmt = NULL;
+    static const char *q =
+      "SELECT folder || '/' || filename FROM main.images"
+      " JOIN main.film_rolls ON film_id = film_rolls.id"
+      " WHERE lower(substr(filename, -4)) IN"
+      "       ('.arw','.dng','.cr2','.cr3','.nef','.nrw','.raf'"
+      "       ,'.orf','.rw2','.srw','.pef','.raw','.rwl','.iiq')"
+      " ORDER BY images.id LIMIT 64";
+    if(sqlite3_prepare_v2(db, q, -1, &stmt, NULL) != SQLITE_OK) return NULL;
+    CIContext *ctx = _ciraw_shared_context();
+    int seen[8] = { 0 };
+    int nseen = 0;
+    while(sqlite3_step(stmt) == SQLITE_ROW && nseen < 2)
+    {
+      const char *path = (const char *)sqlite3_column_text(stmt, 0);
+      if(path == NULL) continue;
+      NSString *p = [NSString stringWithUTF8String:path];
+      CIRAWFilter *f = [CIRAWFilter filterWithImageURL:[NSURL fileURLWithPath:p]];
+      if(f == nil) continue;
+      CIRAWDecoderVersion want = _ciraw_pick_version(f, p);
+      if(want == nil) continue;
+      _ciraw_neutralize(f);
+      _ciraw_warm_version(ctx, seen, &nseen, f, want, path);
+      // a v9 warmup does not cover the legacy kernels the downgrade path
+      // uses, so give files that offer both a second decode with the
+      // highest legacy version
+      if([want intValue] >= 9)
+      {
+        CIRAWDecoderVersion legacy = nil;
+        int best = -1;
+        for(NSString *v in f.supportedDecoderVersions)
+        {
+          const int n = [v intValue];
+          if(n > 0 && n < 9 && n > best)
+          {
+            best = n;
+            legacy = v;
+          }
+        }
+        if(legacy != nil)
+          _ciraw_warm_version(ctx, seen, &nseen, f, legacy, path);
+      }
+    }
+    sqlite3_finalize(stmt);
+    if(nseen > 0)
+      dt_print(DT_DEBUG_ALWAYS,
+               "[ciraw_open] warmup finished, %d decoder pipeline(s) compiled", nseen);
+  }
+  return NULL;
+}
+
+void dt_ciraw_warmup_start(void)
+{
+  g_thread_new("ciraw-warmup", _ciraw_warmup_thread, NULL);
 }
 
 // clang-format off

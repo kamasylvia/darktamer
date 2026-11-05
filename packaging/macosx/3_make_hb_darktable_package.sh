@@ -191,6 +191,9 @@ function install_share {
     srcShareDir="$homebrewHome/share/$1"
     targetShareDir="$dtResourcesDir/share/"
 
+    # not every formula ships a share dir (e.g. iso-codes may be absent)
+    [[ -d "$srcShareDir" ]] || return 0
+
     # Copy share directory
     cp -RL "$srcShareDir" "$targetShareDir"
 }
@@ -245,7 +248,9 @@ done
 # Add homebrew shared objects
 dtSharedObjDirs="ImageMagick gtk-3.0 gdk-pixbuf-2.0 gio"
 for dtSharedObj in $dtSharedObjDirs; do
-    mkdir "$dtResourcesDir"/lib/"$dtSharedObj"
+    # builds without ImageMagick (GraphicsMagick instead) have no such dir
+    [[ -d "$homebrewHome"/lib/"$dtSharedObj" ]] || continue
+    mkdir -p "$dtResourcesDir"/lib/"$dtSharedObj"
     cp -LR "$homebrewHome"/lib/"$dtSharedObj"/* "$dtResourcesDir"/lib/"$dtSharedObj"/
 done
 
@@ -277,9 +282,9 @@ for dtShare in $dtShares; do
     install_share "$dtShare"
 done
 
-# Update icon caches
-gtk3-update-icon-cache -f "$dtResourcesDir"/share/icons/Adwaita
-gtk3-update-icon-cache -f "$dtResourcesDir"/share/icons/hicolor
+# Update icon caches; a missing theme index is cosmetic, do not abort
+gtk3-update-icon-cache -f "$dtResourcesDir"/share/icons/Adwaita 2>/dev/null || true
+gtk3-update-icon-cache -f "$dtResourcesDir"/share/icons/hicolor 2>/dev/null || true
 
 # Try updating lensfun
 lensfun-update-data || true
@@ -326,8 +331,9 @@ check_cache_paths "$loadersCacheFile"
 # Move it to the right place
 mv "$loadersCacheFile" "$dtResourcesDir"/etc/gtk-3.0/
 
-# ImageMagick config files
-cp -R $homebrewHome/Cellar/imagemagick/*/etc $dtResourcesDir
+# ImageMagick config files (only present for ImageMagick builds)
+imEtcDir=$(ls -d "$homebrewHome"/Cellar/imagemagick/*/etc 2>/dev/null | head -1 || true)
+[[ -n "$imEtcDir" && -d "$imEtcDir" ]] && cp -R "$imEtcDir" "$dtResourcesDir" || true
 
 # Install homebrew dependencies of lib subdirectories
 dtLibFiles=$(find -E "$dtResourcesDir"/lib/*/* -regex '.*\.(so|dylib)')

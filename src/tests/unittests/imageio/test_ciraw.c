@@ -17,8 +17,9 @@
 */
 
 // the Apple Core Image RAW v9 loader: field contract of a v9 decode,
-// flags after the decode, determinism across two decodes, and the loud
-// failure a camera outside the v9 list gets. Only built with USE_CIRAW.
+// flags after the decode, determinism across two decodes, and the
+// best-available-version fallback for a camera outside the v9 list.
+// Only built with USE_CIRAW.
 //
 // needs darktable started: dt_imageio_open_ciraw reads EXIF (which locks
 // darktable.exiv2_threadsafe) and renders into a mipmap buffer, so the
@@ -195,7 +196,7 @@ static void test_two_decodes_are_bit_identical(void **state)
   _free_entry(entry2);
 }
 
-static void test_non_v9_camera_fails_loudly(void **state)
+static void test_non_v9_camera_decodes_best_available(void **state)
 {
   if(!CIRAW_TEST_NONV9_SAMPLE[0]
      || !g_file_test(CIRAW_TEST_NONV9_SAMPLE, G_FILE_TEST_IS_REGULAR))
@@ -205,10 +206,15 @@ static void test_non_v9_camera_fails_loudly(void **state)
   dt_image_init(&img);
   g_strlcpy(img.filename, CIRAW_TEST_NONV9_SAMPLE, sizeof(img.filename));
 
-  // forced v9, no downgrade: outside the list is UNSUPPORTED_CAMERA
+  // outside the v9 list is a downgrade to the newest legacy version,
+  // not an error: the probe must succeed and mark the image CIRAW
   assert_int_equal(
       dt_imageio_open_ciraw(&img, CIRAW_TEST_NONV9_SAMPLE, NULL),
-      DT_IMAGEIO_UNSUPPORTED_CAMERA);
+      DT_IMAGEIO_OK);
+  assert_true(img.flags & DT_IMAGE_CIRAW);
+  assert_int_equal(img.loader, LOADER_CIRAW);
+  assert_true(img.width > 0);
+  assert_true(img.height > 0);
 }
 
 int main(int argc,
@@ -225,7 +231,7 @@ int main(int argc,
     cmocka_unit_test(test_probe_fills_the_field_contract),
     cmocka_unit_test(test_full_decode_renders_float_rgb),
     cmocka_unit_test(test_two_decodes_are_bit_identical),
-    cmocka_unit_test(test_non_v9_camera_fails_loudly),
+    cmocka_unit_test(test_non_v9_camera_decodes_best_available),
   };
   return cmocka_run_group_tests(tests, _group_setup, _group_teardown);
 }

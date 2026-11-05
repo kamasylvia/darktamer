@@ -59,6 +59,9 @@
 #include "views/view.h"
 #include "gui/about.h"
 #include "gui/preferences.h"
+#ifdef HAVE_CIRAW
+#include "imageio/imageio_ciraw.h"
+#endif
 
 #include <gdk/gdkkeysyms.h>
 
@@ -2380,6 +2383,11 @@ void dt_gui_gtk_run(dt_gui_gtk_t *gui)
   if(dt_control_running())
   {
     g_atomic_int_set(&darktable.gui_running, 1);
+#ifdef HAVE_CIRAW
+    // compile the CoreImage Metal pipelines in the background so the
+    // first decode a user triggers costs ~1s instead of a 30-50s build
+    dt_ciraw_warmup_start();
+#endif
     gui->main_loop = g_main_loop_new(NULL, FALSE);
     g_main_loop_run(gui->main_loop);
     g_main_loop_unref(gui->main_loop);

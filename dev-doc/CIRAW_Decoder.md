@@ -1,10 +1,11 @@
 # The CIRAW Decoder
 
 An Apple-only build option (`--enable-ciraw`, `USE_CIRAW`) that replaces
-every raw decoder with Apple Core Image RAW **v9**
-(`CIRAWDecoderVersion9`, macOS 27+). There is no fallback: on a CIRAW
-build, a camera outside the v9 list fails to open loudly. Default builds
-behave exactly as before.
+every raw decoder with Apple Core Image RAW, preferring the **v9**
+decoder (`CIRAWDecoderVersion9`, macOS 27+) and falling back to the
+newest legacy version a camera offers. It is still the only raw decoder
+on a CIRAW build: the fallback stays inside the CIRAW pipeline. Default
+builds behave exactly as before.
 
 ## Why a full replacement
 
@@ -14,7 +15,7 @@ Three decisions, taken together:
 |----------|---------|
 | Scope | CIRAW v9 is the only raw loader on Apple builds that enable it |
 | Pipeline | A new "Apple RAW" mode, not a reuse of `DT_IMAGE_S_RAW` |
-| Coverage | Forced v9: cameras outside the list are an error, never a downgrade |
+| Coverage | v9 preferred; cameras outside the v9 list downgrade to the newest legacy version they offer |
 
 CIRAW v9 output is developed RGB, not sensor data: `meta.mm` probing of
 `CIRAWFilter.properties` shows no `AsShotNeutral`, no color matrices, no
@@ -75,9 +76,11 @@ short:
 
 1. `[CIRAWFilter filterWithImageURL:]`; nil means
    `DT_IMAGEIO_UNSUPPORTED_FORMAT`.
-2. `supportedDecoderVersions` must contain v9 (`CIRAWDecoderVersion9`,
-   or `CIRAWDecoderVersion9DNG` for DNG); otherwise
-   `DT_IMAGEIO_UNSUPPORTED_CAMERA`, never a downgrade.
+2. `supportedDecoderVersions` preference order: v9
+   (`CIRAWDecoderVersion9`, or `CIRAWDecoderVersion9DNG` for DNG);
+   otherwise the newest legacy version offered (v8, v7, ...); only a
+   camera offering no version at all gets
+   `DT_IMAGEIO_UNSUPPORTED_CAMERA`. The downgrade is logged.
 3. `downloadResourcesWithTimeout:` (10 s) first: camera resources for new
    bodies may need an OTA download. Failure is `UNSUPPORTED_CAMERA` with
    a log line saying the machine needs to go online.
@@ -192,13 +195,39 @@ under `HAVE_CIRAW`: camera names come straight from EXIF.
 
 ## Coverage and fallback
 
-v9 covers 69 of 939 bodies (7.3%); the other 870 fail with the
-unsupported-camera message. `UNSUPPORTED_CAMERA` means "supported file
-type, camera not in the v9 list" (or resources need a download, or the
-OS predates macOS 27), never "try another decoder": there is none.
-Bit-identical repeat decodes hold within one machine and OS version
-only; v7/v8/v9 pairwise means differ by 0.002-0.007, so an OS update can
-change the rendering of the same file.
+The class-level v9 list covers 69 of 941 bodies (6.7%), but a list entry
+does not guarantee a decode: some entries are named in a style no real
+body reports in EXIF ("Sony Alpha ILCE-7R V" while the camera reports
+"ILCE-7RM5"), and per-file `supportedDecoderVersions` omits v9 for them.
+Those bodies downgrade to the newest legacy version they offer, with a
+log line; only a camera offering no version at all (or one needing an
+unavailable resource download, or an OS predating macOS 27) fails with
+the unsupported-camera message. `UNSUPPORTED_CAMERA` never means "try
+another decoder": there is none outside the CIRAW pipeline.
+
+The downgrade needs no tone compensation of its own: with the same
+neutralize knobs, a legacy decode matches the v9 decode of the same
+file within ~1.5% on channel means and 0.1-1.4% on luma quantiles up to
+p95 (two DNG files offering both versions, measured on 27.3 beta 1).
+Two things do matter. First, flavor: DNG files offer plain and
+".dng"-suffixed versions side by side ("8" and "8.dng"), and a DNG
+decoded by the plain flavor lands ~30% off; the fallback picks the
+flavor matching the file extension. Second, the earlier statement
+holds: v7/v8/v9 pairwise means differ by 0.002-0.007, so the downgrade
+and an OS update each can change the rendering of the same file.
+
+### Startup warmup
+
+The first decode after launch pays a one-time CoreImage Metal kernel
+build, 30-50s per decoder pipeline (measured on macOS 27.3); every
+decode after that costs 0.85-2s for a 60MP frame. The GUI therefore
+starts `dt_ciraw_warmup_start` (imageio_ciraw.mm) when the event loop
+begins: a background thread renders the first raw files in the library
+at 2048px, covering the v9 pipeline and the downgrade pipeline, so the
+first image a user opens never lands in the cold build. Mip generation
+cannot render at reduced resolution instead: the pixelpipe replays
+edits from the full-resolution frame, so every decode is full-frame by
+design, same as rawspeed.
 
 ## Open verification
 

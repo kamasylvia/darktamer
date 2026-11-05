@@ -10,32 +10,33 @@ Core Image RAW **v9** pipeline instead of rawspeed.
 
 Sibling project: [Lightamer](https://github.com/kamasylvia/Lightamer).
 
-**Status: experimental, development paused.** The feature is off by default
-and Apple-only (`--enable-ciraw`, cmake `-DUSE_CIRAW=ON`). Default builds
-behave exactly like darktable. The decoder needs macOS 27 or newer; Core
-Image is weak-linked so the app still starts on older systems.
-
-Development is on hold until Apple extends the v9 decoder list: the
-primary test camera here, the Sony A7R V, is not covered by it. Measured
-on macOS 27, CIRAW offers that body decoder versions 7 and 8 only, so an
-A7R V raw fails to open in a CIRAW build, while the same file decodes fine
-through rawspeed in a default build.
+**Status: experimental.** The feature is off by default and Apple-only
+(`--enable-ciraw`, cmake `-DUSE_CIRAW=ON`). Default builds behave exactly
+like darktable. The decoder needs macOS 27 or newer; Core Image is
+weak-linked so the app still starts on older systems.
 
 ## How a CIRAW build differs from darktable
 
 ### One raw decoder, and a hard camera allowlist
 
-CIRAW v9 is the only raw loader. There is no fallback: a camera outside
-Apple's v9 decoder list fails to open with an explicit error, never a
-downgrade to another decoder. The list currently covers 69 camera bodies
-(about 5% of the cameras rawspeed supports: Canon 19, Fujifilm 2, Leica 1,
-Nikon 5, Panasonic 21, Sigma 3, Sony 18). Flagship bodies such as the Nikon
-Z8/Z9, Sony A1/A9 and Canon R5 Mark II are not on it. The Sony A7R V is
-absent too: probing `CIRAWFilter.supportedDecoderVersions` on macOS 27
-reports versions 7 and 8 for it, and a decode attempt errors out with
-"camera not in the CIRAW v9 list" (imageio_ciraw.mm). DNG files decode
-through the v9 DNG decoder. Camera resources for newly released bodies may
-need a one-time online download before first decode.
+CIRAW is the only raw loader, and v9 is the preferred decoder: a camera
+on Apple's v9 decoder list decodes with v9, and a camera outside the
+list downgrades to the newest legacy version it offers (logged at open;
+the decode stays inside the CIRAW pipeline either way). Only a camera
+offering no CIRAW decoder version at all fails to open with an explicit
+error, never a downgrade to another decoder. The class-level v9 list
+currently covers 69 camera bodies (about 5% of the cameras rawspeed
+supports: Canon 19, Fujifilm 2, Leica 1, Nikon 5, Panasonic 21, Sigma 3,
+Sony 18), but a list entry does not guarantee a v9 decode: some entries
+are named in a style no real body reports in EXIF. The Sony A7R V is
+one such entry: the list has "Sony Alpha ILCE-7R V" while the camera
+reports "ILCE-7RM5" in EXIF, so macOS never offers v9 for its files
+(measured on macOS 27.0.1 and 27.3 beta 1; forcing v9 silently decodes
+with v8) and the fork decodes it with v8. Flagship bodies such as the
+Nikon Z8/Z9, Sony A1/A9 and Canon R5 Mark II are not on the list at all.
+DNG files decode through the v9 DNG decoder when offered. Camera
+resources for newly released bodies may need a one-time online download
+before first decode.
 
 ### Developed RGB, not sensor data
 
@@ -103,3 +104,6 @@ This fork tracks `darktable-org/darktable` and intends to keep merging it.
 Bugs in anything that is not the CIRAW decoder belong in the
 [upstream tracker](https://github.com/darktable-org/darktable/issues);
 CIRAW-specific issues go to this fork's tracker.
+
+Sync is one-way: updates flow from upstream into this fork, and no code
+from this fork is ever contributed back upstream.

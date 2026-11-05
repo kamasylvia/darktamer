@@ -102,6 +102,13 @@ static int _current_view_cb(lua_State *L)
     dt_ctl_switch_mode_to_by_view(view);
   }
   const dt_view_t *current_view = dt_view_manager_get_current_view(darktable.view_manager);
+  // the async early script can run before the view manager has picked a
+  // first view; nil is the honest answer then (compare view.c:1195)
+  if(current_view == NULL)
+  {
+    lua_pushnil(L);
+    return 1;
+  }
   dt_lua_module_entry_push(L, "view", current_view->module_name);
   return 1;
 }

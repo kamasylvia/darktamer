@@ -41,6 +41,8 @@ static inline char *_conf_get_var(const char *name)
 {
   char *str;
 
+  if(name == NULL) return NULL;
+
   dt_pthread_mutex_lock(&darktable.conf->mutex);
 
   str = (char *)g_hash_table_lookup(darktable.conf->override_entries, name);
@@ -73,6 +75,8 @@ fin:
  * return 1 if key/value is still the one passed on commandline. */
 static int _conf_set_if_not_overridden(const char *name, char *str)
 {
+  if(name == NULL) return 0;
+
   dt_pthread_mutex_lock(&darktable.conf->mutex);
 
   char *over = (char *)g_hash_table_lookup(darktable.conf->override_entries, name);
@@ -182,6 +186,8 @@ static int _conf_get_int_fast(const char *name)
 
 int dt_conf_get_int(const char *name)
 {
+  if(name == NULL) return 0;
+
   const int min = dt_confgen_get_int(name, DT_MIN);
   const int max = dt_confgen_get_int(name, DT_MAX);
   const int val = _conf_get_int_fast(name);
@@ -308,6 +314,7 @@ float dt_conf_get_and_sanitize_float(const char *name,
 gboolean dt_conf_get_bool(const char *name)
 {
   const char *str = _conf_get_var(name);
+  if(str == NULL) return FALSE;
   return (str[0] != 'F') && (str[0] != 'f') && (str[0] != '0') && (str[0] != '\0');
 }
 
@@ -574,6 +581,8 @@ void dt_conf_init(dt_conf_t *cf,
 /** check if key exists, return 1 if lookup succeeded, 0 if failed..*/
 gboolean dt_conf_key_exists(const char *key)
 {
+  if(key == NULL) return FALSE;
+
   dt_pthread_mutex_lock(&darktable.conf->mutex);
   const gboolean res = (g_hash_table_lookup(darktable.conf->table, key) != NULL)
                   || (g_hash_table_lookup(darktable.conf->override_entries, key) != NULL);
@@ -640,6 +649,8 @@ dt_confgen_type_t dt_confgen_type(const char *name)
 gboolean dt_confgen_value_exists(const char *name,
                                  const dt_confgen_value_kind_t kind)
 {
+  if(name == NULL) return FALSE;
+
   const dt_confgen_value_t *item = g_hash_table_lookup(darktable.conf->x_confgen, name);
   if(item == NULL)
     return FALSE;

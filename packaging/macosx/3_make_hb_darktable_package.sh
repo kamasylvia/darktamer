@@ -361,6 +361,22 @@ if [[ ! -d "$dtResourcesDir"/share/themes/Mac/gtk-3.0 ]]; then
 fi
 cp -L "$homebrewHome"/share/themes/Mac/gtk-3.0/gtk-keys.css "$dtResourcesDir"/share/themes/Mac/gtk-3.0/
 
+# Pin the GTK/GLib module lookups inside the bundle: libgio and
+# libgdk-pixbuf carry their homebrew module dirs compiled in, and without
+# these the process loads homebrew's modules next to the bundled
+# libraries — two glib instances in one process, GObject type checks
+# across copies fail and darktable crashes at first panel interaction.
+# dtResourcesDir is relative to the build dir; LaunchServices needs
+# absolute paths here
+absResourcesDir=$(cd "$dtResourcesDir" && pwd)
+PLIST="$dtWorkingDir"/Contents/Info.plist
+/usr/libexec/PlistBuddy -c 'Add :LSEnvironment dict' "$PLIST" 2>/dev/null
+/usr/libexec/PlistBuddy -c "Add :LSEnvironment:XDG_DATA_DIRS string $absResourcesDir/share:/opt/homebrew/share:/usr/local/share:/usr/share" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :LSEnvironment:GIO_MODULE_DIR string $absResourcesDir/lib/gio/modules" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :LSEnvironment:GDK_PIXBUF_MODULE_FILE string $absResourcesDir/etc/gtk-3.0/loaders.cache" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :LSEnvironment:GTK_IMMODULE_FILE string $absResourcesDir/etc/gtk-3.0/gtk.immodules" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :LSEnvironment:GTK_PATH string $absResourcesDir" "$PLIST"
+
 # Sign app bundle
 if [ -n "$CODECERT" ]; then
     # Use certificate if one has been provided

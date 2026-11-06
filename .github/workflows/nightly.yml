@@ -347,11 +347,13 @@ jobs:
       fail-fast: true
       matrix:
         build:
-          - { os: macos-15,       xcode: 26.3, deployment: 15.0 } # AppleClang 17, arm64
+          # the xcode-27 image is macOS 27.0.1 with Xcode 27.2: the CIRAW
+          # decoder needs the macOS 27 SDK headers
+          - { os: xcode-27,       xcode: 27.2, deployment: 15.0 } # AppleClang 27, arm64
         compiler:
           - { compiler: XCode,   CC: cc, CXX: c++ }
         btype: [ Release ]
-        eco: [-DBINARY_PACKAGE_BUILD=ON -DBUILD_CURVE_TOOLS=ON -DBUILD_NOISE_TOOLS=ON -DUSE_GRAPHICSMAGICK=ON -DUSE_IMAGEMAGICK=OFF]
+        eco: [-DBINARY_PACKAGE_BUILD=ON -DBUILD_CURVE_TOOLS=ON -DBUILD_NOISE_TOOLS=ON -DUSE_GRAPHICSMAGICK=ON -DUSE_IMAGEMAGICK=OFF -DUSE_CIRAW=ON -DUSE_MAC_INTEGRATION=ON]
         target:
           - skiptest
         generator:

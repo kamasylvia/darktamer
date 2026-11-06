@@ -122,7 +122,12 @@ static void _ciraw_neutralize(CIRAWFilter *filter)
     // unevenly and the dt highlights module never sees developed-RGB whites,
     // so highlights render magenta (batch-9 probe hr.mm: H0 R/B 1.268,
     // magenta-frac 2.08% -> H1 R/B 1.197, magenta-frac 0.00%)
-    filter.highlightRecoveryEnabled = YES;
+    // the knob only exists from macOS 26 on; without it the Apple default
+    // applies, which is also on
+    if(@available(macOS 26.0, *))
+    {
+      filter.highlightRecoveryEnabled = YES;
+    }
     // kept neutral: dt's lens module handles correction
     filter.lensCorrectionEnabled = NO;
     // kept neutral: dt denoises

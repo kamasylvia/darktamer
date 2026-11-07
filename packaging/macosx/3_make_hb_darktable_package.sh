@@ -376,6 +376,12 @@ export GIO_MODULE_DIR="$RES/lib/gio/modules"
 export GDK_PIXBUF_MODULE_FILE="$RES/etc/gtk-3.0/loaders.cache"
 export GTK_IMMODULE_FILE="$RES/etc/gtk-3.0/gtk.immodules"
 export GTK_PATH="$RES"
+# keep the multi-GB thumbnail disk cache off the internal SSD: when the
+# library volume (external, holds the raws) is mounted, redirect the
+# cache there; otherwise fall back to the default ~/.cache location
+if [ -d /Volumes/UNITEK ]; then
+  exec "$DIR/darktable-bin" --cachedir "/Volumes/UNITEK/dt-cache" "$@"
+fi
 exec "$DIR/darktable-bin" "$@"
 LAUNCHER
 chmod +x "$dtExecDir"/darktable

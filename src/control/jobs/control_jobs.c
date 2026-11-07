@@ -3189,6 +3189,84 @@ static GList *_apply_lua_filter(GList *images)
 }
 #endif
 
+/* cache prewarm: decode the grid thumbnails of a list of images into
+   the disk backend, one job over the whole list. used by the lighttable
+   module with a button, and chained after folder imports when the
+   cache_prewarm_after_import preference is set */
+static gboolean _prewarm_running = FALSE;
+
+gboolean dt_control_prewarm_cache_running(void)
+{
+  return _prewarm_running;
+}
+
+static int32_t _prewarm_job_run(dt_job_t *job)
+{
+  GList *imgids = (GList *)dt_control_job_get_params(job);
+  const guint count = g_list_length(imgids);
+  double last_update = 0.0;
+  int done = 0;
+
+  for(GList *l = imgids; l; l = g_list_next(l))
+  {
+    if(dt_control_job_get_state(job) == DT_JOB_STATE_CANCELLED) break;
+
+    const dt_imgid_t imgid = GPOINTER_TO_INT(l->data);
+
+    // generate the biggest grid level, then write it to the disk cache
+    // and drop it from memory immediately: the point is to fill the disk
+    // backend, not to hold ~1GB float frames in RAM (a CIRAW full slot
+    // is ~1GB). smaller mips are generated from the disk jpg without
+    // another full decode
+    dt_mipmap_buffer_t buf;
+    dt_mipmap_cache_get(&buf, imgid, DT_MIPMAP_8, DT_MIPMAP_BLOCKING, 'r');
+    dt_mipmap_cache_release(&buf);
+    dt_mipmap_cache_evict_at_size(imgid, DT_MIPMAP_8);
+
+    done++;
+    char msg[80];
+    snprintf(msg, sizeof(msg), _("prewarming thumbnails (%d / %u)"), done, count);
+    dt_control_job_set_progress_message(job, msg);
+
+    const double curr_time = dt_get_wtime();
+    if(curr_time > last_update + 0.5)
+    {
+      dt_control_job_set_progress(job, CLAMP((double)done / (double)count, 0.0, 1.0));
+      last_update = curr_time;
+    }
+  }
+
+  g_list_free(imgids);
+  _prewarm_running = FALSE;
+  dt_print(DT_DEBUG_ALWAYS, "[cache prewarm] finished, %d thumbnails ensured", done);
+  return 0;
+}
+
+static void _prewarm_params_free(void *params)
+{
+  g_list_free((GList *)params);
+}
+
+void dt_control_prewarm_cache_start(GList *imgids)
+{
+  if(_prewarm_running || imgids == NULL)
+  {
+    g_list_free(imgids);
+    return;
+  }
+  _prewarm_running = TRUE;
+  dt_job_t *job = dt_control_job_create(&_prewarm_job_run, _("prewarm thumbnail cache"));
+  if(job == NULL)
+  {
+    g_list_free(imgids);
+    _prewarm_running = FALSE;
+    return;
+  }
+  dt_control_job_set_params(job, imgids, _prewarm_params_free);
+  dt_control_job_add_progress(job, _("prewarming thumbnails"), TRUE);
+  dt_control_add_job(DT_JOB_QUEUE_USER_BG, job);
+}
+
 static int32_t _control_import_job_run(dt_job_t *job)
 {
   dt_control_image_enumerator_t *params = dt_control_job_get_params(job);
@@ -3270,6 +3348,14 @@ static int32_t _control_import_job_run(dt_job_t *job)
   DT_CONTROL_SIGNAL_RAISE(DT_SIGNAL_TAG_CHANGED);
   DT_CONTROL_SIGNAL_RAISE(DT_SIGNAL_GEOTAG_CHANGED, imgs, 0);
   DT_CONTROL_SIGNAL_RAISE(DT_SIGNAL_FILMROLLS_IMPORTED, filmid);
+  if(dt_conf_get_bool("cache_prewarm_after_import") && imgs)
+  {
+    // hand the freshly imported ids over to the prewarm job (it frees
+    // the list); makes the thumbnail disk cache follow imports so the
+    // first lighttable visit is never a decode storm
+    GList *imgids = g_list_copy(imgs);
+    dt_control_prewarm_cache_start(imgids);
+  }
   if(data->wait)
     *data->wait = FALSE;  // resume caller
   return 0;

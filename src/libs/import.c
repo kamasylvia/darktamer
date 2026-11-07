@@ -24,6 +24,7 @@
 #include "common/datetime.h"
 #include "control/conf.h"
 #include "control/control.h"
+#include "control/jobs.h"
 
 #ifdef HAVE_GPHOTO2
 #include "control/jobs/camera_jobs.h"
@@ -2102,6 +2103,10 @@ static void _import_from_dialog_new(dt_lib_module_t* self)
   gtk_widget_set_hexpand(gtk_grid_get_child_at(grid, col++, line++), TRUE);
   g_signal_connect(G_OBJECT(ignore_nonraws), "toggled",
                    G_CALLBACK(_ignore_nonraws_toggled), self);
+#ifdef HAVE_CIRAW
+  dt_gui_preferences_bool(grid, "cache_prewarm_after_import", col++, line, TRUE);
+  gtk_widget_set_hexpand(gtk_grid_get_child_at(grid, col++, line++), TRUE);
+#endif
   gtk_box_pack_start(GTK_BOX(rbox), GTK_WIDGET(grid), FALSE, FALSE, 8);
 
   // files list

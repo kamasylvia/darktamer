@@ -312,6 +312,13 @@
     <shortdescription>CIRAW full-frame cache (MB)</shortdescription>
     <longdescription>memory budget in MB for cached developed full frames in CIRAW builds. A full frame of a 60MP raw is ~1GB, so small budgets trade re-decode time for memory when browsing large collections. Eviction is by exact byte cost; this is a soft quota darktable tries to meet.</longdescription>
   </dtconfig>
+  <dtconfig prefs="processing" section="cpugpu">
+    <name>cache_ciraw_decodes</name>
+    <type min="1" max="8">int</type>
+    <default>2</default>
+    <shortdescription>CIRAW concurrent decodes</shortdescription>
+    <longdescription>how many CIRAW decodes may run at the same time. Each in-flight decode holds a full developed frame (~1GB for a 60MP raw) plus CoreImage working memory, so low values cap the memory spike during thumbnail regeneration at the cost of slower batch operations. Two keep the GPU busy on a single-GPU machine.</longdescription>
+  </dtconfig>
 <!-- be sure to keep the code in sync when changing this enum, see common/darktable.c void dt_get_sysresource_level() -->
   <dtconfig prefs="processing" section="cpugpu">
     <name>resourcelevel</name>

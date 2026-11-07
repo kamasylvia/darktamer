@@ -382,18 +382,20 @@ jobs:
           git submodule update
           popd
       - name: Install Base Dependencies
+        timeout-minutes: 45
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_UPGRADE: 1
+          HOMEBREW_NO_INSTALL_FROM_API: 1
         run: |
           # The GitHub runner images ship aws/tap, which Homebrew does not trust and
           # thus warns about on every invocation. We don't use it, so drop it.
           brew untap --force aws/tap || true
           brew update > /dev/null || true
-          cd src/.ci
-          export HOMEBREW_NO_INSTALL_UPGRADE=1
-          brew bundle --verbose || true
+          brew bundle --file src/.ci/Brewfile --verbose || true
 
           # Rebuild GraphicsMagick for macOS bundling
-          export HOMEBREW_NO_INSTALL_FROM_API=1
-          brew developer on
+          brew developer on || true
           gm_formula=`brew edit --quiet --print-path graphicsmagick`
           cat $gm_formula | sed 's/--with-modules/--disable-installed/1' > gm_formula.tmp
           mv gm_formula.tmp $gm_formula

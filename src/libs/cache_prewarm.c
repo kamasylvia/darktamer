@@ -83,11 +83,15 @@ static int32_t _prewarm_job_run(dt_job_t *job)
 
     const dt_imgid_t imgid = GPOINTER_TO_INT(l->data);
 
-    // the biggest grid level first; smaller mips then come from this
-    // buffer (or from the disk cache) without another full decode
+    // generate the biggest grid level, then write it to the disk cache
+    // and drop it from memory immediately: the point of this job is to
+    // fill the disk backend, not to hold frames in RAM (a CIRAW full
+    // slot is ~1GB). smaller mips are generated from the disk jpg
+    // without another full decode
     dt_mipmap_buffer_t buf;
     dt_mipmap_cache_get(&buf, imgid, DT_MIPMAP_8, DT_MIPMAP_BLOCKING, 'r');
     dt_mipmap_cache_release(&buf);
+    dt_mipmap_cache_evict_at_size(imgid, DT_MIPMAP_8);
 
     done++;
     char msg[80];

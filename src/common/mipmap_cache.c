@@ -434,6 +434,23 @@ void *dt_mipmap_cache_alloc(dt_mipmap_buffer_t *buf,
 
     entry->data_size = buffer_size;
 
+#ifdef HAVE_CIRAW
+    // the entry was inserted with a flat cost; account the real frame
+    // bytes now that the size is known, so the cache_ciraw_full_mb quota
+    // can evict these. the level cache lock is a leaf here (gc only
+    // trylocks entries), and the cache mutex itself is not held while
+    // the loader fills the buffer
+    {
+      dt_cache_t *level_cache = (buf->size == DT_MIPMAP_FULL)
+        ? &darktable.mipmap_cache->mip_full.cache
+        : &darktable.mipmap_cache->mip_f.cache;
+      dt_pthread_mutex_lock(&level_cache->lock);
+      level_cache->cost += buffer_size - entry->cost;
+      dt_pthread_mutex_unlock(&level_cache->lock);
+      entry->cost = buffer_size;
+    }
+#endif
+
     // set buffer size only if we're making it larger.
     dsc = (dt_mipmap_buffer_dsc_t *)entry->data;
   }
@@ -485,22 +502,6 @@ static void _mipmap_cache_allocate_dynamic(void *data,
     {
       // these are fixed-size:
       entry->data_size = MAX(cache->buffer_size[mip], 4 * MIN_IMG_PIXELS);
-    }
-    else if(mip == DT_MIPMAP_FULL)
-    {
-#ifdef HAVE_CIRAW
-      // pre-allocate the developed float frame so the entry cost is exact
-      // for the byte quota: ciraw_open would otherwise grow the buffer
-      // after insertion and the real cost would never reach the quota
-      int imgfw = 0, imgfh = 0;
-      dt_image_get_final_size(_get_imgid(entry->key), &imgfw, &imgfh);
-      size_t pixels = MAX((size_t)(imgfw + 4) * (imgfh + 4), MIN_IMG_PIXELS);
-      entry->data_size = sizeof(dt_mipmap_buffer_dsc_t) + 4 * sizeof(float) * pixels;
-      // the cache adds entry->cost to the level's total after this callback
-      entry->cost = entry->data_size;
-#else
-      entry->data_size = sizeof(*dsc) + sizeof(float) * 4 * MIN_IMG_PIXELS;
-#endif
     }
     else
     {
@@ -599,15 +600,18 @@ read_error:
     dsc->flags = DT_MIPMAP_BUFFER_DSC_FLAG_GENERATE;
   else dsc->flags = 0;
 
-  // cost: the FULL entry got its real byte cost in the pre-allocation
-  // above (CIRAW byte quota); other levels use their flat slot size
+  // cost: FULL is accounted exactly once ciraw_open sizes the frame (see
+  // dt_mipmap_cache_alloc); LDR_MAX carries its real size; every other
+  // level is a fixed-size slot
   if(mip == DT_MIPMAP_FULL)
   {
-#ifndef HAVE_CIRAW
+#ifdef HAVE_CIRAW
+    // flat at insert; dt_mipmap_cache_alloc corrects it to the real
+    // frame bytes so the cache_ciraw_full_mb quota can evict
+    entry->cost = 1;
+#else
     entry->cost = 1;
 #endif
-    // HAVE_CIRAW: entry->cost was set to entry->data_size in the
-    // pre-allocation branch
   }
   else if(mip == DT_MIPMAP_LDR_MAX)
     entry->cost = entry->data_size;

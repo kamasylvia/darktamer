@@ -3209,7 +3209,11 @@ static int32_t _prewarm_job_run(dt_job_t *job)
 
   for(GList *l = imgids; l; l = g_list_next(l))
   {
+    // stop on cancellation *and* on shutdown: a quit while 871 decodes
+    // are queued otherwise leaves the ui waiting in dt_control_quit for
+    // the whole queue to drain
     if(dt_control_job_get_state(job) == DT_JOB_STATE_CANCELLED) break;
+    if(!dt_control_running()) break;
 
     const dt_imgid_t imgid = GPOINTER_TO_INT(l->data);
 

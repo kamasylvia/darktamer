@@ -69,6 +69,10 @@ void dt_control_export(GList *imgid_list,
 void dt_control_merge_hdr(void);
 void dt_control_import(GList *imgs, const char *datetime_override, const gboolean inplace);
 void dt_control_refresh_exif(void);
+// queue a background job decoding the grid thumbnails of these images
+// into the disk cache; takes ownership of the list
+void dt_control_prewarm_cache_start(GList *imgids);
+gboolean dt_control_prewarm_cache_running(void);
 
 G_END_DECLS
 

@@ -1815,6 +1815,13 @@
     <longdescription>hide built-in presets of utility modules in presets menu.</longdescription>
   </dtconfig>
   <dtconfig prefs="import" section="session">
+    <name>cache_prewarm_after_import</name>
+    <type>bool</type>
+    <default>false</default>
+    <shortdescription>prewarm thumbnail cache after import</shortdescription>
+    <longdescription>when set, a background job decodes the thumbnails of freshly imported images into the disk cache right after the import finishes, so browsing the new filmroll never stalls on raw decodes. The decode still costs ~2s per image and runs through the configured concurrency and memory limits.</longdescription>
+  </dtconfig>
+  <dtconfig prefs="import" section="session">
     <name>session/base_directory_pattern</name>
     <type>string</type>
     <default>$(PICTURES_FOLDER)/Darktable</default>

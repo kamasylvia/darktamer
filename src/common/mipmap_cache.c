@@ -486,6 +486,22 @@ static void _mipmap_cache_allocate_dynamic(void *data,
       // these are fixed-size:
       entry->data_size = MAX(cache->buffer_size[mip], 4 * MIN_IMG_PIXELS);
     }
+    else if(mip == DT_MIPMAP_FULL)
+    {
+#ifdef HAVE_CIRAW
+      // pre-allocate the developed float frame so the entry cost is exact
+      // for the byte quota: ciraw_open would otherwise grow the buffer
+      // after insertion and the real cost would never reach the quota
+      int imgfw = 0, imgfh = 0;
+      dt_image_get_final_size(_get_imgid(entry->key), &imgfw, &imgfh);
+      size_t pixels = MAX((size_t)(imgfw + 4) * (imgfh + 4), MIN_IMG_PIXELS);
+      entry->data_size = sizeof(dt_mipmap_buffer_dsc_t) + 4 * sizeof(float) * pixels;
+      // the cache adds entry->cost to the level's total after this callback
+      entry->cost = entry->data_size;
+#else
+      entry->data_size = sizeof(*dsc) + sizeof(float) * 4 * MIN_IMG_PIXELS;
+#endif
+    }
     else
     {
       entry->data_size = sizeof(*dsc) + sizeof(float) * 4 * MIN_IMG_PIXELS;
@@ -583,23 +599,15 @@ read_error:
     dsc->flags = DT_MIPMAP_BUFFER_DSC_FLAG_GENERATE;
   else dsc->flags = 0;
 
-  // cost is just flat one for the buffer, as the buffers might have different sizes,
-  // to make sure quota is meaningful. in CIRAW builds the F/full frames are
-  // developed float images whose size dwarfs everything else, so they carry
-  // their real byte cost and evict against the cache_ciraw_full_mb quota;
-  // cache->cost is corrected here for the growth from the header-only
-  // allocation the entry was inserted with (this runs inside the cache lock)
-  if(mip >= DT_MIPMAP_F)
+  // cost: the FULL entry got its real byte cost in the pre-allocation
+  // above (CIRAW byte quota); other levels use their flat slot size
+  if(mip == DT_MIPMAP_FULL)
   {
-#ifdef HAVE_CIRAW
-    dt_cache_t *level_cache = (mip == DT_MIPMAP_FULL) ? &cache->mip_full.cache
-                                                      : &cache->mip_f.cache;
-    const size_t old_cost = entry->cost;
-    entry->cost = entry->data_size;
-    level_cache->cost += entry->data_size - old_cost;
-#else
+#ifndef HAVE_CIRAW
     entry->cost = 1;
 #endif
+    // HAVE_CIRAW: entry->cost was set to entry->data_size in the
+    // pre-allocation branch
   }
   else if(mip == DT_MIPMAP_LDR_MAX)
     entry->cost = entry->data_size;

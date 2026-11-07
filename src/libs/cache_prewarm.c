@@ -158,6 +158,10 @@ static void _button_clicked(GtkButton *button, gpointer user_data)
   if(d->poll_id == 0)
     d->poll_id = g_timeout_add_seconds(1, _prewarm_poll, self);
 
+  // without this the job has no progress object and the gui never shows
+  // a bar for it; cancellable gives the user a cancel button in the
+  // background jobs panel
+  dt_control_job_add_progress(job, _("prewarming thumbnails"), TRUE);
   dt_control_add_job(DT_JOB_QUEUE_USER_BG, job);
 }
 

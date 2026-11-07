@@ -584,9 +584,23 @@ read_error:
   else dsc->flags = 0;
 
   // cost is just flat one for the buffer, as the buffers might have different sizes,
-  // to make sure quota is meaningful.
+  // to make sure quota is meaningful. in CIRAW builds the F/full frames are
+  // developed float images whose size dwarfs everything else, so they carry
+  // their real byte cost and evict against the cache_ciraw_full_mb quota;
+  // cache->cost is corrected here for the growth from the header-only
+  // allocation the entry was inserted with (this runs inside the cache lock)
   if(mip >= DT_MIPMAP_F)
+  {
+#ifdef HAVE_CIRAW
+    dt_cache_t *level_cache = (mip == DT_MIPMAP_FULL) ? &cache->mip_full.cache
+                                                      : &cache->mip_f.cache;
+    const size_t old_cost = entry->cost;
+    entry->cost = entry->data_size;
+    level_cache->cost += entry->data_size - old_cost;
+#else
     entry->cost = 1;
+#endif
+  }
   else if(mip == DT_MIPMAP_LDR_MAX)
     entry->cost = entry->data_size;
   else
@@ -773,12 +787,18 @@ void dt_mipmap_cache_init()
   // one entry per worker thread plus one for the darkroom pipe; in
   // CIRAW builds each slot is a ~1GB developed float frame (not a small
   // mosaic slot), and eviction runs on the cache_ciraw_full_mb byte
-  // quota instead, so the count is only a hard backstop. The old
-  // power-of-two rounding is gone upstream-side too
-  const int32_t max_mem_bufs = dt_worker_threads() + 1; (mipmap_cache: cap the full-level slot count in CIRAW builds)
+  // quota instead, so the count is only a hard backstop
+  const int32_t max_mem_bufs = dt_worker_threads() + 1; (mipmap_cache: byte budget for the CIRAW full cache, exposed in prefs)
+
+#ifdef HAVE_CIRAW
+  const int64_t ciraw_budget = (int64_t)dt_conf_get_int("cache_ciraw_full_mb") * 1024 * 1024;
+#endif
 
   // for this buffer, because it can be very busy during import
   dt_cache_init(&cache->mip_full.cache, 0, max_mem_bufs);
+#ifdef HAVE_CIRAW
+  cache->mip_full.cache.cost_quota = ciraw_budget;
+#endif
   dt_cache_set_allocate_callback(&cache->mip_full.cache,
                                  _mipmap_cache_allocate_dynamic, cache);
   dt_cache_set_cleanup_callback(&cache->mip_full.cache,
@@ -787,6 +807,9 @@ void dt_mipmap_cache_init()
 
   // same for mipf:
   dt_cache_init(&cache->mip_f.cache, 0, max_mem_bufs);
+#ifdef HAVE_CIRAW
+  cache->mip_f.cache.cost_quota = ciraw_budget;
+#endif
   dt_cache_set_allocate_callback(&cache->mip_f.cache,
                                  _mipmap_cache_allocate_dynamic, cache);
   dt_cache_set_cleanup_callback(&cache->mip_f.cache,

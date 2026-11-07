@@ -305,6 +305,13 @@
     <default>5</default>
     <shortdescription>waiting time between each image in slideshow</shortdescription>
   </dtconfig>
+  <dtconfig prefs="processing" section="cpugpu">
+    <name>cache_ciraw_full_mb</name>
+    <type>int</type>
+    <default>2048</default>
+    <shortdescription>CIRAW full-frame cache (MB)</shortdescription>
+    <longdescription>memory budget in MB for cached developed full frames in CIRAW builds. A full frame of a 60MP raw is ~1GB, so small budgets trade re-decode time for memory when browsing large collections. Eviction is by exact byte cost; this is a soft quota darktable tries to meet.</longdescription>
+  </dtconfig>
 <!-- be sure to keep the code in sync when changing this enum, see common/darktable.c void dt_get_sysresource_level() -->
   <dtconfig prefs="processing" section="cpugpu">
     <name>resourcelevel</name>

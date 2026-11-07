@@ -24,9 +24,9 @@
 #import <Metal/Metal.h>
 
 #include "common/darktable.h"
-#include "common/conf.h"
 #include "common/database.h"
 #include "common/exif.h"
+#include "control/conf.h"
 #include "common/image.h"
 #include "common/mipmap_cache.h"
 #include "imageio/imageio_ciraw.h"
@@ -325,29 +325,6 @@ dt_imageio_retval_t dt_imageio_open_ciraw(dt_image_t *img, const char *filename,
     if(cs == NULL)
     {
       _ciraw_decode_gate_leave();
-      dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] `%s': no extended linear sRGB space",
-               img->filename);
-      return DT_IMAGEIO_LOAD_FAILED;
-    }
-    if(!buf)
-    {
-      dt_print(DT_DEBUG_ALWAYS,
-               "[ciraw_open] could not alloc full buffer for image `%s'",
-               img->filename);
-      return DT_IMAGEIO_CACHE_FULL;
-    }
-
-    CIContext *ctx = _ciraw_shared_context();
-    if(ctx == nil)
-    {
-      dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] `%s': no Metal device for CIRAW",
-               img->filename);
-      return DT_IMAGEIO_LOAD_FAILED;
-    }
-
-    CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
-    if(cs == NULL)
-    {
       dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] `%s': no extended linear sRGB space",
                img->filename);
       return DT_IMAGEIO_LOAD_FAILED;

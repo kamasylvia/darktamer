@@ -49,7 +49,7 @@ uint32_t container(dt_lib_module_t *self)
 
 int position(const dt_lib_module_t *self)
 {
-  return 50; // below the collections module
+  return 990; // directly below the import module (999)
 }
 
 static gboolean _prewarm_poll(gpointer user_data)

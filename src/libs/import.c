@@ -2100,7 +2100,7 @@ static void _import_from_dialog_new(dt_lib_module_t* self)
   }
   GtkWidget *ignore_nonraws =
     dt_gui_preferences_bool(grid, "ui_last/import_ignore_nonraws", col++, line, TRUE);
-  gtk_widget_set_hexpand(gtk_grid_get_child_at(grid, col++, line++), TRUE);
+  gtk_widget_set_hexpand(gtk_grid_get_child_at(grid, col++, line), TRUE);
   g_signal_connect(G_OBJECT(ignore_nonraws), "toggled",
                    G_CALLBACK(_ignore_nonraws_toggled), self);
 #ifdef HAVE_CIRAW

@@ -770,9 +770,12 @@ void dt_mipmap_cache_init()
   dt_cache_set_cleanup_callback(&cache->mip_thumbs.cache,
                                 _mipmap_cache_deallocate_dynamic, cache);
 
-  // one entry per worker thread plus one for the darkroom pipe. Each
-  // entry holds a whole decoded raw, so the count sets the memory use
-  const int32_t max_mem_bufs = dt_worker_threads() + 1;
+  // one entry per worker thread plus one for the darkroom pipe; in
+  // CIRAW builds each slot is a ~1GB developed float frame (not a small
+  // mosaic slot), and eviction runs on the cache_ciraw_full_mb byte
+  // quota instead, so the count is only a hard backstop. The old
+  // power-of-two rounding is gone upstream-side too
+  const int32_t max_mem_bufs = dt_worker_threads() + 1; (mipmap_cache: cap the full-level slot count in CIRAW builds)
 
   // for this buffer, because it can be very busy during import
   dt_cache_init(&cache->mip_full.cache, 0, max_mem_bufs);

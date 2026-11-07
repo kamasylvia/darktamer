@@ -24,6 +24,7 @@
 #import <Metal/Metal.h>
 
 #include "common/darktable.h"
+#include "common/conf.h"
 #include "common/database.h"
 #include "common/exif.h"
 #include "common/image.h"
@@ -38,6 +39,31 @@
 // and mipmap loads run on several threads at once
 static CIContext *ciraw_context = nil;
 static pthread_mutex_t ciraw_context_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// decode concurrency cap: each in-flight decode holds a full-frame float
+// destination (~963MB for a 60MP raw) plus CoreImage working memory. The
+// mipmap job queue runs on up to a dozen threads and would otherwise spike
+// several GB during thumbnail regeneration on a 16G machine; two concurrent
+// decodes keep the GPU busy without the swap storm
+static dispatch_semaphore_t ciraw_decode_sem;
+
+static void _ciraw_decode_gate_enter(void)
+{
+  static dispatch_once_t once;
+  dispatch_once(&once, ^{
+    // clamped to 1..8 by the cache_ciraw_decodes config range
+    int conf = dt_conf_get_int("cache_ciraw_decodes");
+    if(conf < 1) conf = 1;
+    if(conf > 8) conf = 8;
+    ciraw_decode_sem = dispatch_semaphore_create(conf);
+  });
+  dispatch_semaphore_wait(ciraw_decode_sem, DISPATCH_TIME_FOREVER);
+}
+
+static void _ciraw_decode_gate_leave(void)
+{
+  dispatch_semaphore_signal(ciraw_decode_sem);
+}
 
 static CIContext *_ciraw_shared_context(void)
 {
@@ -275,7 +301,34 @@ dt_imageio_retval_t dt_imageio_open_ciraw(dt_image_t *img, const char *filename,
 
     // render straight into the mipmap buffer: a 60MP RGBA float frame is
     // ~0.9GB, a temp copy would double the peak
+    _ciraw_decode_gate_enter();
     void *buf = dt_mipmap_cache_alloc(mbuf, img);
+    if(!buf)
+    {
+      _ciraw_decode_gate_leave();
+      dt_print(DT_DEBUG_ALWAYS,
+               "[ciraw_open] could not alloc full buffer for image `%s'",
+               img->filename);
+      return DT_IMAGEIO_CACHE_FULL;
+    }
+
+    CIContext *ctx = _ciraw_shared_context();
+    if(ctx == nil)
+    {
+      _ciraw_decode_gate_leave();
+      dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] `%s': no Metal device for CIRAW",
+               img->filename);
+      return DT_IMAGEIO_LOAD_FAILED;
+    }
+
+    CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
+    if(cs == NULL)
+    {
+      _ciraw_decode_gate_leave();
+      dt_print(DT_DEBUG_ALWAYS, "[ciraw_open] `%s': no extended linear sRGB space",
+               img->filename);
+      return DT_IMAGEIO_LOAD_FAILED;
+    }
     if(!buf)
     {
       dt_print(DT_DEBUG_ALWAYS,
@@ -338,6 +391,7 @@ dt_imageio_retval_t dt_imageio_open_ciraw(dt_image_t *img, const char *filename,
       }
     }
     CGColorSpaceRelease(cs);
+    _ciraw_decode_gate_leave();
     if(ret != DT_IMAGEIO_OK)
       return ret;
 

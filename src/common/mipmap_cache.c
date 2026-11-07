@@ -779,7 +779,17 @@ void dt_mipmap_cache_init()
 
   // even with one thread you want two buffers. one for dr one for thumbs.
   // Also have the nr of cache entries larger than worker threads
-  const int full_entries = 2 * dt_worker_threads();
+  int full_entries = 2 * dt_worker_threads();
+#ifdef HAVE_CIRAW
+  // the count-based budget assumes small rawspeed mosaic slots; a CIRAW
+  // full buffer is a developed float frame (9504x6336xRGBA float ~= 963MB
+  // for an A7R V raw), so the default slot count let browsing a collection
+  // swap out 14G. cap the entry count: two frames ~= 1.9G
+  {
+    const int ciraw_cap = 2;
+    if(full_entries > ciraw_cap) full_entries = ciraw_cap;
+  }
+#endif
   const int32_t max_mem_bufs = _nearest_power_of_two(full_entries);
 
   // for this buffer, because it can be very busy during import

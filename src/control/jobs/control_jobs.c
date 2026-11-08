@@ -3240,7 +3240,9 @@ static int32_t _prewarm_job_run(dt_job_t *job)
     }
   }
 
-  g_list_free(imgids);
+  // imgids is the job params: ownership stays with the job, freed once
+  // by the destroy callback in dt_control_job_dispose - freeing here too
+  // is a double free (crashed worker threads at job end)
   _prewarm_running = FALSE;
   dt_print(DT_DEBUG_ALWAYS, "[cache prewarm] finished, %d thumbnails ensured", done);
   return 0;

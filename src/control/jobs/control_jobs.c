@@ -30,6 +30,7 @@
 #include "common/image.h"
 #include "common/image_cache.h"
 #include "common/mipmap_cache.h"
+#include "views/view.h"
 #include "common/styles.h"
 #include "common/tags.h"
 #include "common/undo.h"
@@ -3214,6 +3215,45 @@ static int32_t _prewarm_job_run(dt_job_t *job)
     // the whole queue to drain
     if(dt_control_job_get_state(job) == DT_JOB_STATE_CANCELLED) break;
     if(!dt_control_running()) break;
+
+    // pause while the user is editing: darkroom owns the decode gate and
+    // the GPU, and the point of the job is to fill the disk cache without
+    // getting in the way. resumes automatically back in lighttable
+    gboolean paused = FALSE;
+    const dt_view_t *warm_view = dt_view_manager_get_current_view(darktable.view_manager);
+    while(_prewarm_running
+          && dt_control_running()
+          && dt_control_job_get_state(job) != DT_JOB_STATE_CANCELLED
+          && warm_view
+          && g_strcmp0(warm_view->module_name, "lighttable") != 0)
+    {
+      paused = TRUE;
+      dt_control_job_set_progress_message(job, _("prewarm paused while editing"));
+      g_usleep(1000000);
+      if(dt_control_job_get_state(job) == DT_JOB_STATE_CANCELLED) break;
+      if(!dt_control_running()) break;
+      warm_view = dt_view_manager_get_current_view(darktable.view_manager);
+    }
+    if(dt_control_job_get_state(job) == DT_JOB_STATE_CANCELLED
+       || !dt_control_running())
+      break;
+    if(paused)
+    {
+      // grace period: let the return-path thumbnail loads of the visible
+      // grid land before resuming background decodes
+      dt_control_job_set_progress_message(job, _("prewarm resuming"));
+      for(int g = 0; g < 6; g++)
+      {
+        g_usleep(500000);
+        if(dt_control_job_get_state(job) == DT_JOB_STATE_CANCELLED
+           || !dt_control_running())
+          break;
+        warm_view = dt_view_manager_get_current_view(darktable.view_manager);
+        if(warm_view == NULL
+           || g_strcmp0(warm_view->module_name, "lighttable") != 0)
+          break;
+      }
+    }
 
     const dt_imgid_t imgid = GPOINTER_TO_INT(l->data);
 

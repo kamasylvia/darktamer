@@ -457,6 +457,9 @@ static void *_ciraw_warmup_thread(void *arg)
 {
   @autoreleasepool
   {
+    // warmup decodes run in the background class: a user double-clicking
+    // an image right after launch must not queue behind them
+    dt_ciraw_decode_set_background(TRUE);
     if(@available(macOS 27.0, *))
     {
     }
@@ -512,6 +515,7 @@ static void *_ciraw_warmup_thread(void *arg)
       dt_print(DT_DEBUG_ALWAYS,
                "[ciraw_open] warmup finished, %d decoder pipeline(s) compiled", nseen);
   }
+  dt_ciraw_decode_set_background(FALSE);
   return NULL;
 }
 

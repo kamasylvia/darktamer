@@ -817,7 +817,7 @@ void dt_mipmap_cache_init()
   // CIRAW builds each slot is a ~1GB developed float frame (not a small
   // mosaic slot), and eviction runs on the cache_ciraw_full_mb byte
   // quota instead, so the count is only a hard backstop
-  const int32_t max_mem_bufs = dt_worker_threads() + 1; (mipmap_cache: byte budget for the CIRAW full cache, exposed in prefs)
+  const int32_t max_mem_bufs = dt_worker_threads() + 1;
 
 #ifdef HAVE_CIRAW
   const int64_t ciraw_budget = (int64_t)dt_conf_get_int("cache_ciraw_full_mb") * 1024 * 1024;

@@ -645,11 +645,18 @@ static void _mipmap_cache_deallocate_dynamic(void *data,
   if(mip <= DT_MIPMAP_LDR_MAX)
   {
     dt_mipmap_buffer_dsc_t *dsc = (dt_mipmap_buffer_dsc_t *)entry->data;
+    dt_print(DT_DEBUG_ALWAYS,
+             "[mipmap_cache] cleanup mip %d img %i flags=%d width=%d height=%d cachedir='%s' disk_backend=%d",
+             (int)mip, _get_imgid(entry->key), dsc->flags, dsc->width, dsc->height,
+             cache->cachedir, dt_conf_get_bool("cache_disk_backend"));
     // don't write skulls:
     if(dsc->width > ERR_IMG_MAX_DIM || dsc->height > ERR_IMG_MAX_DIM)
     {
       if(dsc->flags & DT_MIPMAP_BUFFER_DSC_FLAG_INVALIDATE)
       {
+        dt_print(DT_DEBUG_ALWAYS,
+                 "[mipmap_cache] invalidated mip %d of image %i, dropping its disk thumbnail",
+                 (int)mip, _get_imgid(entry->key));
         _mipmap_cache_unlink_ondisk_thumbnail(data, _get_imgid(entry->key), mip);
       }
       else if(cache->cachedir[0]
@@ -663,6 +670,9 @@ static void _mipmap_cache_deallocate_dynamic(void *data,
         snprintf(filename, sizeof(filename),
                  "%s.d/%d", cache->cachedir, mip);
         const int mkd = g_mkdir_with_parents(filename, 0750);
+        if(mkd)
+          dt_print(DT_DEBUG_ALWAYS,
+                   "[mipmap_cache] could not create cache dir %s", filename);
         if(!mkd)
         {
           snprintf(filename, sizeof(filename),
@@ -715,8 +725,15 @@ static void _mipmap_cache_deallocate_dynamic(void *data,
                                      exif, exif_len))
             {
 write_error:
+              dt_print(DT_DEBUG_ALWAYS,
+                       "[mipmap_cache] failed to write mip %d thumbnail of image %i to %s",
+                       (int)mip, _get_imgid(entry->key), filename);
               g_unlink(filename);
             }
+            else
+              dt_print(DT_DEBUG_CACHE,
+                       "[mipmap_cache] wrote mip %d thumbnail of image %i to %s",
+                       (int)mip, _get_imgid(entry->key), filename);
           }
           if(f) fclose(f);
         }
@@ -1392,7 +1409,10 @@ void dt_mipmap_cache_evict_at_size(const dt_imgid_t imgid,
   assert(cache);
   const uint32_t key = _get_key(imgid, mip);
   // write thumbnail to disc if not existing there
-  dt_cache_remove(&_get_cache(cache, mip)->cache, key);
+  const gboolean found = dt_cache_remove(&_get_cache(cache, mip)->cache, key);
+  dt_print(DT_DEBUG_ALWAYS,
+           "[mipmap_cache] evict mip %d img %i -> entry %s",
+           (int)mip, imgid, found ? "NOT IN CACHE" : "removed");
 }
 
 void dt_mipmap_cache_evict(const dt_imgid_t imgid)

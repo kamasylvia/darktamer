@@ -174,6 +174,7 @@ const dt_iop_order_entry_t legacy_order[] = {
   { {67.0f }, "rawoverexposed", 0},
   { {67.5f }, "dither", 0},
   { {68.0f }, "borders", 0},
+  { {68.5f }, "yiyin", 0},
   { {69.0f }, "watermark", 0},
   { {71.0f }, "gamma", 0},
   { { 0.0f }, "", 0}
@@ -298,6 +299,7 @@ const dt_iop_order_entry_t v30_order[] = {
   { {74.0f }, "rawoverexposed", 0},
   { {75.0f }, "dither", 0},
   { {76.0f }, "borders", 0},
+  { {76.5f }, "yiyin", 0},
   { {77.0f }, "watermark", 0},
   { {78.0f }, "gamma", 0},
   { { 0.0f }, "", 0 }
@@ -421,6 +423,7 @@ const dt_iop_order_entry_t v50_order[] = {
   { {74.0f }, "rawoverexposed", 0},
   { {75.0f }, "dither", 0},
   { {76.0f }, "borders", 0},
+  { {76.5f }, "yiyin", 0},
   { {77.0f }, "watermark", 0},
   { {78.0f }, "gamma", 0},
   { { 0.0f }, "", 0 }
@@ -547,6 +550,7 @@ const dt_iop_order_entry_t v30_jpg_order[] = {
   { { 74.0f }, "rawoverexposed", 0 },
   { { 75.0f }, "dither", 0 },
   { { 76.0f }, "borders", 0 },
+  { { 76.5f }, "yiyin", 0 },
   { { 77.0f }, "watermark", 0 },
   { { 78.0f }, "gamma", 0 },
   { { 0.0f }, "", 0 }
@@ -673,6 +677,7 @@ const dt_iop_order_entry_t v50_jpg_order[] = {
   { { 74.0f }, "rawoverexposed", 0 },
   { { 75.0f }, "dither", 0 },
   { { 76.0f }, "borders", 0 },
+  { { 76.5f }, "yiyin", 0 },
   { { 77.0f }, "watermark", 0 },
   { { 78.0f }, "gamma", 0 },
   { { 0.0f }, "", 0 }
@@ -767,6 +772,7 @@ void dt_ioppr_migrate_legacy_iop_order_list(GList *iop_order_list)
   _insert_before_after(iop_order_list, "highlights", "rasterfile", TRUE);
   _insert_before_after(iop_order_list, "demosaic", "demosaicscale", FALSE);
   _insert_before_after(iop_order_list, "colorbalance", "colorharmonizer", TRUE);
+  _insert_before_after(iop_order_list, "borders", "yiyin", FALSE);
 }
 
 static dt_iop_order_t _ioppr_get_default_iop_order_version(const dt_imgid_t imgid)

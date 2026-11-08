@@ -21,7 +21,7 @@ cd "$scriptDir"/
 # Define base variables
 buildDir="../../build/macosx"
 dtPackageDir="$buildDir"/package
-dtAppName="darktable"
+dtAppName="Darktamer"
 dtWorkingDir="$dtPackageDir"/"$dtAppName".app
 dtResourcesDir="$dtWorkingDir"/Contents/Resources
 dtExecDir="$dtWorkingDir"/Contents/MacOS
@@ -376,13 +376,15 @@ export GIO_MODULE_DIR="$RES/lib/gio/modules"
 export GDK_PIXBUF_MODULE_FILE="$RES/etc/gtk-3.0/loaders.cache"
 export GTK_IMMODULE_FILE="$RES/etc/gtk-3.0/gtk.immodules"
 export GTK_PATH="$RES"
-# keep the multi-GB thumbnail disk cache off the internal SSD: when the
-# library volume (external, holds the raws) is mounted, redirect the
-# cache there; otherwise fall back to the default ~/.cache location
+# keep the multi-GB thumbnail disk cache off the internal SSD, and keep
+# this app fully separate from an official darktable install: own
+# config/library dir, own thumbnail cache
 if [ -d /Volumes/UNITEK ]; then
-  exec "$DIR/darktable-bin" --cachedir "/Volumes/UNITEK/dt-cache" "$@"
+  exec "$DIR/darktable-bin" --configdir "$HOME/.config/darktamer" --cachedir "/Volumes/UNITEK/dt-cache-darktamer" "$@"
 fi
-exec "$DIR/darktable-bin" "$@"
+CFG="$HOME/.config/darktamer"
+mkdir -p "$CFG"
+exec "$DIR/darktable-bin" --configdir "$CFG" --cachedir "$HOME/.cache/darktable-darktamer" "$@"
 LAUNCHER
 chmod +x "$dtExecDir"/darktable
 

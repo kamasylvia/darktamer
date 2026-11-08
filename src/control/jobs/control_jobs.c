@@ -30,6 +30,7 @@
 #include "common/image.h"
 #include "common/image_cache.h"
 #include "common/mipmap_cache.h"
+#include "imageio/imageio_ciraw.h"
 #include "views/view.h"
 #include "common/styles.h"
 #include "common/tags.h"
@@ -3203,6 +3204,9 @@ gboolean dt_control_prewarm_cache_running(void)
 
 static int32_t _prewarm_job_run(dt_job_t *job)
 {
+  // this worker thread decodes in the background class: single-slot gate,
+  // never starving the interactive path
+  dt_ciraw_decode_set_background(TRUE);
   GList *imgids = (GList *)dt_control_job_get_params(job);
   const guint count = g_list_length(imgids);
   double last_update = 0.0;
@@ -3291,6 +3295,7 @@ static int32_t _prewarm_job_run(dt_job_t *job)
   // imgids is the job params: ownership stays with the job, freed once
   // by the destroy callback in dt_control_job_dispose - freeing here too
   // is a double free (crashed worker threads at job end)
+  dt_ciraw_decode_set_background(FALSE);
   _prewarm_running = FALSE;
   dt_print(DT_DEBUG_ALWAYS, "[cache prewarm] finished, %d thumbnails ensured", done);
   return 0;

@@ -27,16 +27,21 @@
 #include "bauhaus/bauhaus.h"
 #include "common/gaussian.h"
 #include "common/opencl.h"
+#include "common/utility.h"
 #include "develop/imageop.h"
 #include "develop/imageop_gui.h"
 #include "gui/color_picker_proxy.h"
 #include "gui/gtk.h"
 #include "iop/iop_api.h"
 
+#include <gtk/gtk.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
-DT_MODULE_INTROSPECTION(1, dt_iop_yiyin_params_t)
+#include <pango/pangocairo.h>
+
+DT_MODULE_INTROSPECTION(2, dt_iop_yiyin_params_t)
 
 typedef enum dt_iop_yiyin_backdrop_t
 {
@@ -45,9 +50,17 @@ typedef enum dt_iop_yiyin_backdrop_t
   DT_IOP_YIYIN_BACKDROP_COUNT = 2
 } dt_iop_yiyin_backdrop_t;
 
+typedef enum dt_iop_yiyin_style_t
+{
+  DT_IOP_YIYIN_STYLE_YIYIN = 0, // $DESCRIPTION: "yiyin backdrop"
+  DT_IOP_YIYIN_STYLE_FILM  = 1, // $DESCRIPTION: "film strip"
+  DT_IOP_YIYIN_STYLE_COUNT = 2
+} dt_iop_yiyin_style_t;
+
+// the v1 shape (56 bytes) is the prefix of v2; legacy_params upgrades it
 typedef struct dt_iop_yiyin_params_t
 {
-  // backdrop
+  // ── v1: yiyin backdrop
   dt_iop_yiyin_backdrop_t backdrop; // $DEFAULT: DT_IOP_YIYIN_BACKDROP_SOLID $DESCRIPTION: "backdrop"
   float fill_color[3];              // $DEFAULT: 1.0 1.0 1.0 $DESCRIPTION: "fill color"
   float blur_amount;                // $MIN: 0.0 $MAX: 200.0 $DEFAULT: 100.0 $DESCRIPTION: "blur strength"
@@ -62,6 +75,15 @@ typedef struct dt_iop_yiyin_params_t
   float corner_radius;              // $MIN: 0.0 $MAX: 50.0 $DEFAULT: 2.1 $DESCRIPTION: "corner radius"
   float shadow;                     // $MIN: 0.0 $MAX: 50.0 $DEFAULT: 6.0 $DESCRIPTION: "shadow"
   float text_bottom_offset;         // $MIN: 0.0 $MAX: 0.2 $DEFAULT: 0.027 $DESCRIPTION: "bottom reserve"
+  // ── v2: frame style + text rows + film strip
+  dt_iop_yiyin_style_t style;       // $DEFAULT: DT_IOP_YIYIN_STYLE_YIYIN $DESCRIPTION: "frame style"
+  int text_show;                    // $DEFAULT: 0 $DESCRIPTION: "picture info rows"
+  char text_model[64];              // picture info row 1
+  char text_params[96];             // picture info row 2
+  float text_size;                  // $MIN: 1.0 $MAX: 6.0 $DEFAULT: 2.2 $DESCRIPTION: "info text size"
+  float film_band;                  // $MIN: 0.0 $MAX: 30.0 $DEFAULT: 12.0 $DESCRIPTION: "film band width"
+  char film_caption[64];            // film edge marking
+  float film_caption_size;          // $MIN: 20.0 $MAX: 80.0 $DEFAULT: 50.0 $DESCRIPTION: "film text size"
 } dt_iop_yiyin_params_t;
 
 typedef struct dt_iop_yiyin_data_t
@@ -78,6 +100,14 @@ typedef struct dt_iop_yiyin_data_t
   float corner_radius;
   float shadow;
   float text_bottom_offset;
+  dt_iop_yiyin_style_t style;
+  int text_show;
+  char text_model[64];
+  char text_params[96];
+  float text_size;
+  float film_band;
+  char film_caption[64];
+  float film_caption_size;
 } dt_iop_yiyin_data_t;
 
 typedef struct dt_iop_yiyin_global_data_t
@@ -85,10 +115,14 @@ typedef struct dt_iop_yiyin_global_data_t
   int kernel_yiyin_composite;
   int kernel_yiyin_shadow_sdf;
   int kernel_yiyin_downsample;
+  int kernel_yiyin_film_composite;
+  int kernel_yiyin_text_over;
 } dt_iop_yiyin_global_data_t;
 
 typedef struct dt_iop_yiyin_gui_data_t
 {
+  GtkWidget *style;
+  // yiyin style widgets
   GtkWidget *backdrop;
   GtkWidget *fill_color;
   GtkWidget *blur_amount;
@@ -100,7 +134,23 @@ typedef struct dt_iop_yiyin_gui_data_t
   GtkWidget *landscape_output;
   GtkWidget *corner_radius;
   GtkWidget *shadow;
+  GtkWidget *text_show;
+  GtkWidget *text_model;
+  GtkWidget *text_params;
+  GtkWidget *text_size;
+  // film style widgets
+  GtkWidget *film_band;
+  GtkWidget *film_caption;
+  GtkWidget *film_caption_size;
 } dt_iop_yiyin_gui_data_t;
+
+// a rendered text-row bitmap: white glyph coverage in the alpha channel,
+// rgb unwritten (the composite mixes toward white by the coverage)
+typedef struct _yiyin_text_row_t
+{
+  float *coverage; // w*h float coverage plane, NULL when the row is empty
+  int w, h;        // bitmap dims
+} _yiyin_text_row_t;
 
 // the joint layout, one computation per run. Pixel values are integers in
 // the canvas frame (top-left origin, y down); float64 intermediates folded
@@ -113,7 +163,20 @@ typedef struct _yiyin_layout_t
   double radius;      // corner radius in canvas px (0 = square)
   double shadow_blur; // shadow width in canvas px (CSS shadowBlur unit, a
                       // Gaussian sigma is half of it)
+  double text_bottom; // the bottom text slot in canvas px
 } _yiyin_layout_t;
+
+// the film strip geometry (fixed hole proportions, yiyin-free)
+typedef struct _yiyin_film_geom_t
+{
+  int band;            // band height in px
+  int hole_h, hole_w;  // hole dims
+  int pitch;           // hole pitch (width + gap)
+  int first_hole;      // first hole's left edge
+  int hole_y0, hole_y1; // hole vertical range within each band
+  double black[3];     // band fill, linear
+  double hole[3];      // hole fill (light-box shine), linear
+} _yiyin_film_geom_t;
 
 // brightness tiers for the adaptive dim overlay (0-255 encoded scale);
 // below thresholds map to the gray level used as the overlay color
@@ -169,17 +232,59 @@ static inline float _yiyin_rect_coverage(const float px, const float py,
 // canvas at rate 100 grow to 8px.
 static gboolean _yiyin_is_identity(const dt_iop_yiyin_data_t *d)
 {
+  if(d->style == DT_IOP_YIYIN_STYLE_FILM)
+    return d->film_band <= 0.0f;
   return d->main_image_width_rate >= 100.0f
     && d->mini_top_bottom_margin <= 0.0f
     && !(d->aspect_w > 0 && d->aspect_h > 0)
     && !d->landscape_output
     && d->corner_radius <= 0.0f
-    && d->shadow <= 0.0f;
+    && d->shadow <= 0.0f
+    && !d->text_show;
 }
 
+// steps 1-2 pass 1: the font-sizing canvas (yiyin clacBgImgSize() default
+// height -- row-height independent, which is why fonts can be sized before
+// the rows are known)
+static void _yiyin_pass1_canvas(const int img_w, const int img_h,
+                                const dt_iop_yiyin_data_t *d, int *pw, int *ph)
+{
+  const double w = img_w, h = img_h;
+  double reset_w = w, reset_h = h;
+  if(d->aspect_w > 0 && d->aspect_h > 0)
+  {
+    const double rate = (double)d->aspect_w / (double)d->aspect_h;
+    if(w >= h)
+      reset_h = round(reset_w / rate);
+    else
+      reset_w = round(reset_h * rate);
+  }
+  else if(d->landscape_output && reset_w < reset_h)
+  {
+    const double t = reset_w;
+    reset_w = reset_h;
+    reset_h = t;
+  }
+  const double wh_rate = reset_w / reset_h;
+  const double main_rate = d->main_image_width_rate / 100.0;
+  double bg_h = h;
+  double bg_w = ceil(bg_h * wh_rate);
+  if(w / bg_w > main_rate)
+  {
+    bg_w = ceil(w / main_rate);
+    bg_h = ceil(bg_w / wh_rate);
+  }
+  *pw = (int)bg_w;
+  *ph = (int)bg_h;
+}
+
+// yiyin-style layout. rows_h = the rendered text-row heights in canvas px
+// (top-most row first, yiyin template list order); empty when the info rows
+// are off. The film strip layout never goes through here.
 static void _yiyin_layout(_yiyin_layout_t *L,
                           const int img_w, const int img_h,
-                          const dt_iop_yiyin_data_t *d)
+                          const dt_iop_yiyin_data_t *d,
+                          const int *const rows_h, const int n_rows)
 {
   const double w = img_w, h = img_h;
 
@@ -213,8 +318,8 @@ static void _yiyin_layout(_yiyin_layout_t *L,
     bg_h = ceil(bg_w / wh_rate);
   }
 
-  // step 3: content height (margins >= shadow; rows consume 3/4 of the
-  // offset plus the bottom slot -- the dt port has no text rows yet)
+  // step 3: content height (margins >= shadow; text rows consume 3/4 of
+  // the offset plus the bottom slot)
   const double bg_height = bg_h;
   const double top_offset = bg_height * (d->mini_top_bottom_margin / 100.0);
   double content_top = ceil(top_offset);
@@ -225,7 +330,16 @@ static void _yiyin_layout(_yiyin_layout_t *L,
     if(shadow_height > content_top) content_top = shadow_height;
     main_img_offset = content_top * 2.0;
   }
-  const double content_h = ceil(h + main_img_offset);
+  const double text_bottom_px = bg_height * d->text_bottom_offset;
+  double text_h = 0.0;
+  for(int r = 0; r < n_rows; r++) text_h += (double)rows_h[r];
+  if(n_rows > 0)
+  {
+    // yiyin :526-529 -- JS float math kept verbatim
+    main_img_offset = main_img_offset * 3.0 / 4.0;
+    main_img_offset += text_bottom_px;
+  }
+  const double content_h = ceil(text_h + h + main_img_offset);
 
   // pass 2: the final canvas
   bg_h = content_h;
@@ -252,6 +366,207 @@ static void _yiyin_layout(_yiyin_layout_t *L,
   L->main_top = main_top;
   L->content_h = (int)content_h;
   L->content_top = (int)content_top;
+  L->text_bottom = text_bottom_px;
+}
+
+// the film strip geometry: picture 1:1 between two black bands with a
+// centered row of rectangular light-box holes and the edge marking text
+static void _yiyin_film_geom(_yiyin_film_geom_t *G, const int img_w, const int img_h,
+                             const dt_iop_yiyin_data_t *d)
+{
+  G->band = MAX(1, (int)round((double)img_h * (d->film_band / 100.0)));
+  G->hole_h = MAX(1, (int)round(G->band * 0.40));
+  G->hole_w = MAX(1, (int)round(G->hole_h * 1.35));
+  G->pitch = (int)round(G->hole_w * 2.2);
+  const double gap = G->pitch - G->hole_w;
+  // as many holes as fit, the whole row centered
+  const int n = MAX(1, (int)floor(((double)img_w + gap) / G->pitch));
+  const int total = (int)round(n * (double)G->pitch - gap);
+  G->first_hole = MAX(0, (int)round(((double)img_w - total) / 2.0));
+  G->hole_y0 = (int)round(G->band * 0.30);
+  G->hole_y1 = G->hole_y0 + G->hole_h;
+  // near-black band (#141412) and the light-box shine through the holes
+  G->black[0] = G->black[1] = G->black[2] = _yiyin_srgb_decode(0.078f);
+  G->hole[0] = G->hole[1] = G->hole[2] = 0.85;
+}
+
+// ── picture info rows + film edge marking (pango text legs) ──────────────
+
+// expand one yiyin template pattern against the picture's exif. dt has no
+// stored 35mm-equivalent focal, so {FocalLengthIn35mmFormat} falls back to
+// the focal length times the crop factor when a crop is known.
+static char *_yiyin_expand_pattern(const char *pattern, const dt_image_t *img)
+{
+  GString *s = g_string_sized_new(128);
+  const char *p = pattern;
+  while(*p)
+  {
+    if(*p != '{')
+    {
+      g_string_append_c(s, *p++);
+      continue;
+    }
+    const char *end = strchr(p, '}');
+    if(!end)
+    {
+      g_string_append(s, p);
+      break;
+    }
+    char key[32];
+    const size_t klen = MIN((size_t)(end - p - 1), sizeof(key) - 1);
+    memcpy(key, p + 1, klen);
+    key[klen] = '\0';
+    if(!g_strcmp0(key, "Make") && img->exif_maker[0])
+      g_string_append(s, img->exif_maker);
+    else if(!g_strcmp0(key, "Model") && img->exif_model[0])
+      g_string_append(s, img->exif_model);
+    else if(!g_strcmp0(key, "Lens") && img->exif_lens[0])
+      g_string_append(s, img->exif_lens);
+    else if(!g_strcmp0(key, "FocalLength"))
+      g_string_append_printf(s, "%.0f", (double)img->exif_focal_length);
+    else if(!g_strcmp0(key, "FocalLengthIn35mmFormat"))
+    {
+      const double crop = img->exif_crop > 0.01f ? (double)img->exif_crop : 1.0;
+      g_string_append_printf(s, "%.0f", (double)img->exif_focal_length * crop);
+    }
+    else if(!g_strcmp0(key, "FNumber"))
+      g_string_append_printf(s, "%.1f", (double)img->exif_aperture);
+    else if(!g_strcmp0(key, "ExposureTime"))
+    {
+      char *e = dt_util_format_exposure(img->exif_exposure);
+      g_string_append(s, e);
+      g_free(e);
+    }
+    else if(!g_strcmp0(key, "ISO"))
+      g_string_append_printf(s, "%.0f", (double)img->exif_iso);
+    p = end + 1;
+  }
+  return g_string_free(s, FALSE);
+}
+
+// render one text line into a white-glyph coverage bitmap. The pango/cairo
+// pair below is premultiplied ARGB32 with white glyphs, whose un-premultiplied
+// encoded color is exactly 1.0 -- so the composite mix toward linear white by
+// the ALPHA alone is the correct encoded/linear algebra for white text, the
+// yiyin_watermark_row semantics with the color side collapsed.
+static void _yiyin_render_text_row(const char *text, const double size_px,
+                                   const gboolean bold, _yiyin_text_row_t *row)
+{
+  row->coverage = NULL;
+  row->w = row->h = 0;
+  if(!text || !*text || size_px < 2.0) return;
+
+  PangoFontMap *fontmap = pango_cairo_font_map_get_default();
+  PangoContext *context = pango_font_map_create_context(fontmap);
+  PangoLayout *layout = pango_layout_new(context);
+  PangoFontDescription *fd = pango_font_description_from_string(bold ? "Sans Bold" : "Sans");
+  pango_font_description_set_absolute_size(fd, (gint)(size_px * PANGO_SCALE));
+  pango_layout_set_font_description(layout, fd);
+  pango_layout_set_text(layout, text, -1);
+
+  int tw = 0, th = 0;
+  pango_layout_get_pixel_size(layout, &tw, &th);
+  if(tw < 1 || th < 1)
+  {
+    g_object_unref(layout);
+    g_object_unref(context);
+    pango_font_description_free(fd);
+    return;
+  }
+  const int w = tw + 2, h = th + 2;
+
+  cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+  cairo_t *cr = cairo_create(surf);
+  cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
+  cairo_move_to(cr, 1.0, 1.0);
+  pango_cairo_show_layout(cr, layout);
+  cairo_destroy(cr);
+  cairo_surface_flush(surf);
+
+  float *cov = dt_alloc_align_float((size_t)w * h);
+  if(cov)
+  {
+    const guint8 *data = cairo_image_surface_get_data(surf);
+    const int stride = cairo_image_surface_get_stride(surf);
+    for(int y = 0; y < h; y++)
+    {
+      const guint8 *src = data + (size_t)y * stride;
+      float *dst = cov + (size_t)y * w;
+      for(int x = 0; x < w; x++)
+        dst[x] = src[x * 4 + 3] / 255.0f; // alpha = the coverage
+    }
+    row->coverage = cov;
+    row->w = w;
+    row->h = h;
+  }
+  cairo_surface_destroy(surf);
+  g_object_unref(layout);
+  g_object_unref(context);
+  pango_font_description_free(fd);
+}
+
+static void _yiyin_free_text_row(_yiyin_text_row_t *row)
+{
+  if(row->coverage) dt_free_align(row->coverage);
+  row->coverage = NULL;
+  row->w = row->h = 0;
+}
+
+// the yiyin bottom-slot stacking (composite :300-319 + the :543-545
+// last-row inflation quirk): the LIST-LAST row sits at the canvas bottom,
+// every earlier row above at round(prevTop - h). Returns the first (bottom)
+// row's top so the caller knows where the block landed; row_top[i] receives
+// each input row's top (list order).
+static void _yiyin_stack_text_rows(const _yiyin_text_row_t *rows, const int n_rows,
+                                   const int canvas_w, const int canvas_h,
+                                   const double bottom_offset_px,
+                                   int *const row_left, int *const row_top)
+{
+  int prev_top = 0;
+  for(int index = 0; index < n_rows; index++)
+  {
+    // reversed() order: the list-LAST row is index 0 (bottom-most)
+    const int r = n_rows - 1 - index;
+    const double height_d = (double)rows[r].h + (index == 0 ? bottom_offset_px : 0.0);
+    const int top = index == 0
+      ? (int)round((double)canvas_h - height_d)
+      : (int)round((double)prev_top - height_d);
+    const int left = (int)round(((double)canvas_w - (double)rows[r].w) / 2.0);
+    row_left[r] = left;
+    row_top[r] = top;
+    prev_top = top;
+  }
+}
+
+// blend the rendered rows onto the plane (in-place, linear white by the
+// coverage); rows whose bitmap leaves the canvas are clipped
+static void _yiyin_composite_text_rows(float *const plane, const int plane_w, const int plane_h,
+                                       const _yiyin_text_row_t *rows, const int n_rows,
+                                       const int *const row_left, const int *const row_top)
+{
+  for(int r = 0; r < n_rows; r++)
+  {
+    const _yiyin_text_row_t *row = &rows[r];
+    if(!row->coverage) continue;
+    const int x0 = MAX(0, row_left[r]);
+    const int y0 = MAX(0, row_top[r]);
+    const int x1 = MIN(plane_w, row_left[r] + row->w);
+    const int y1 = MIN(plane_h, row_top[r] + row->h);
+    DT_OMP_FOR()
+    for(int y = y0; y < y1; y++)
+    {
+      const float *src = row->coverage + (size_t)(y - row_top[r]) * row->w;
+      float *dst = plane + ((size_t)y * plane_w + x0) * 4;
+      for(int x = x0; x < x1; x++)
+      {
+        const float a = src[x - row_left[r]];
+        dst[0] += (1.0f - dst[0]) * a;
+        dst[1] += (1.0f - dst[1]) * a;
+        dst[2] += (1.0f - dst[2]) * a;
+        dst += 4;
+      }
+    }
+  }
 }
 
 const char *name()
@@ -302,6 +617,60 @@ void init(dt_iop_module_t *self)
 {
   dt_iop_default_init(self);
   self->default_enabled = FALSE;
+
+  // the introspection machinery zeroes char arrays; fill the pattern/text
+  // defaults by hand
+  dt_iop_yiyin_params_t *d = self->default_params;
+  g_strlcpy(d->text_model, "{Make} {Model}", sizeof(d->text_model));
+  g_strlcpy(d->text_params, "{FocalLengthIn35mmFormat}mm f/{FNumber} {ExposureTime}s ISO{ISO}",
+            sizeof(d->text_params));
+  g_strlcpy(d->film_caption, "KODAK PORTRA 400", sizeof(d->film_caption));
+}
+
+// v1 (56 bytes) is a byte-prefix of v2; only the appended fields need
+// defaults
+int legacy_params(dt_iop_module_t *self,
+                  const void *const old_params,
+                  const int old_version,
+                  void **new_params,
+                  int32_t *new_params_size,
+                  int *new_version)
+{
+  if(old_version == 1 && *new_version == 2)
+  {
+    typedef struct dt_iop_yiyin_params_v1_t
+    {
+      dt_iop_yiyin_backdrop_t backdrop;
+      float fill_color[3];
+      float blur_amount;
+      int adaptive_backdrop;
+      float main_image_width_rate;
+      float mini_top_bottom_margin;
+      int aspect_w, aspect_h;
+      int landscape_output;
+      float corner_radius;
+      float shadow;
+      float text_bottom_offset;
+    } dt_iop_yiyin_params_v1_t;
+    const dt_iop_yiyin_params_v1_t *o = old_params;
+    dt_iop_yiyin_params_t *n = malloc(sizeof(dt_iop_yiyin_params_t));
+    if(!n) return 1;
+    memcpy(n, o, sizeof(*o));
+    n->style = DT_IOP_YIYIN_STYLE_YIYIN;
+    n->text_show = 0;
+    g_strlcpy(n->text_model, "{Make} {Model}", sizeof(n->text_model));
+    g_strlcpy(n->text_params, "{FocalLengthIn35mmFormat}mm f/{FNumber} {ExposureTime}s ISO{ISO}",
+              sizeof(n->text_params));
+    n->text_size = 2.2f;
+    n->film_band = 12.0f;
+    g_strlcpy(n->film_caption, "KODAK PORTRA 400", sizeof(n->film_caption));
+    n->film_caption_size = 50.0f;
+    *new_params = n;
+    *new_params_size = sizeof(dt_iop_yiyin_params_t);
+    *new_version = 2;
+    return 0;
+  }
+  return 1;
 }
 
 void commit_params(dt_iop_module_t *self,
@@ -322,8 +691,19 @@ void modify_roi_out(dt_iop_module_t *self,
 
   if(_yiyin_is_identity(d)) return;
 
+  if(d->style == DT_IOP_YIYIN_STYLE_FILM)
+  {
+    // picture 1:1 between two black bands
+    _yiyin_film_geom_t G;
+    _yiyin_film_geom(&G, roi_in->width, roi_in->height, d);
+    roi_out->x = 0;
+    roi_out->y = 0;
+    roi_out->height = MIN(roi_in->height + 2 * G.band, roi_in->height * 8);
+    return;
+  }
+
   _yiyin_layout_t L;
-  _yiyin_layout(&L, roi_in->width, roi_in->height, d);
+  _yiyin_layout(&L, roi_in->width, roi_in->height, d, NULL, 0);
 
   roi_out->x = 0;
   roi_out->y = 0;
@@ -364,7 +744,7 @@ gboolean distort_transform(dt_iop_module_t *self,
   if(_yiyin_is_identity(d)) return TRUE;
 
   _yiyin_layout_t L;
-  _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d);
+  _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d, NULL, 0);
 
   float *const pts = DT_IS_ALIGNED(points);
   DT_OMP_FOR(if(points_count > 100))
@@ -385,7 +765,7 @@ gboolean distort_backtransform(dt_iop_module_t *self,
   if(_yiyin_is_identity(d)) return TRUE;
 
   _yiyin_layout_t L;
-  _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d);
+  _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d, NULL, 0);
 
   float *const pts = DT_IS_ALIGNED(points);
   DT_OMP_FOR(if(points_count > 100))
@@ -413,7 +793,7 @@ void distort_mask(dt_iop_module_t *self,
   }
 
   _yiyin_layout_t L;
-  _yiyin_layout(&L, roi_in->width, roi_in->height, d);
+  _yiyin_layout(&L, roi_in->width, roi_in->height, d, NULL, 0);
   // the full picture rect carries the mask (corner rounding is a render
   // detail, masks stay rectangular)
   const int bx = CLAMP(L.main_left, 0, roi_out->width - roi_in->width);
@@ -630,6 +1010,12 @@ static float *_yiyin_shadow_plane(const float *const in, const int iw, const int
   return plane;
 }
 
+// defined after process: the film strip render leg
+static void _yiyin_process_film(const float *const in, float *const out,
+                                const dt_iop_roi_t *const roi_in,
+                                const dt_iop_roi_t *const roi_out,
+                                const dt_iop_yiyin_data_t *d);
+
 void process(dt_iop_module_t *self,
              dt_dev_pixelpipe_iop_t *piece,
              const void *const ivoid,
@@ -651,8 +1037,39 @@ void process(dt_iop_module_t *self,
     return;
   }
 
+  if(d->style == DT_IOP_YIYIN_STYLE_FILM)
+  {
+    _yiyin_process_film(in, out, roi_in, roi_out, d);
+    return;
+  }
+
+  // the picture info rows: font-sized on the pass-1 canvas, rendered, then
+  // fed to the layout as heights (yiyin sizes fonts before knowing the rows)
+  _yiyin_text_row_t rows[2];
+  rows[0].coverage = rows[1].coverage = NULL;
+  rows[0].w = rows[0].h = rows[1].w = rows[1].h = 0;
+  int rows_h[2] = { 0, 0 };
+  int n_rows = 0;
+  if(d->text_show && d->backdrop == DT_IOP_YIYIN_BACKDROP_BLUR)
+  {
+    n_rows = 2;
+    int pw1 = 0, ph1 = 0;
+    _yiyin_pass1_canvas(roi_in->width, roi_in->height, d, &pw1, &ph1);
+    // row 1 = the make/model line (yiyin size 3%), row 2 = the params line
+    // (size 2.2%): one slider, ratio kept
+    const double font_px = (double)pw1 * (d->text_size / 100.0);
+    const dt_image_t *img = &piece->pipe->image;
+    char *t1 = _yiyin_expand_pattern(d->text_model, img);
+    char *t2 = _yiyin_expand_pattern(d->text_params, img);
+    _yiyin_render_text_row(t1, font_px * 1.36, TRUE, &rows[0]);
+    _yiyin_render_text_row(t2, font_px, TRUE, &rows[1]);
+    g_free(t1);
+    g_free(t2);
+    for(int r = 0; r < 2; r++) rows_h[r] = rows[r].coverage ? rows[r].h : 0;
+  }
+
   _yiyin_layout_t L;
-  _yiyin_layout(&L, roi_in->width, roi_in->height, d);
+  _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_h, n_rows);
   const int cw = roi_out->width, ch = roi_out->height;
 
   // 1. the blur proxy (blur mode only)
@@ -762,11 +1179,227 @@ void process(dt_iop_module_t *self,
     }
   }
 
+  // 5. the picture info rows, stacked bottom-up into the bottom slot
+  if(n_rows)
+  {
+    int row_left[2], row_top[2];
+    _yiyin_stack_text_rows(rows, 2, cw, ch, L.text_bottom, row_left, row_top);
+    _yiyin_composite_text_rows(out, cw, ch, rows, 2, row_left, row_top);
+  }
+  for(int r = 0; r < 2; r++) _yiyin_free_text_row(&rows[r]);
+
   if(proxy) dt_free_align(proxy);
   if(shadow) dt_free_align(shadow);
 }
 
+// the film strip: picture 1:1 between two black bands, a centered row of
+// light-box holes per band, the edge marking centered in the bottom band
+static void _yiyin_process_film(const float *const in, float *const out,
+                                const dt_iop_roi_t *const roi_in,
+                                const dt_iop_roi_t *const roi_out,
+                                const dt_iop_yiyin_data_t *d)
+{
+  _yiyin_film_geom_t G;
+  _yiyin_film_geom(&G, roi_in->width, roi_in->height, d);
+  const int cw = roi_out->width, ch = roi_out->height;
+  const int ih = roi_in->height;
+
+  DT_OMP_FOR()
+  for(int j = 0; j < ch; j++)
+  {
+    float *o = out + (size_t)j * cw * 4;
+    const int pic_y = j - G.band;
+    const gboolean in_picture = pic_y >= 0 && pic_y < ih;
+    // in a band: the local y inside that band (top band and bottom band use
+    // the same hole range)
+    const int band_ly = j < G.band ? j : j - G.band - ih;
+    const gboolean hole_row = !in_picture && band_ly >= G.hole_y0 && band_ly < G.hole_y1;
+    const double *hole = G.hole, *black = G.black;
+
+    for(int i = 0; i < cw; i++)
+    {
+      if(in_picture)
+      {
+        const float *m = in + ((size_t)pic_y * roi_in->width + i) * 4;
+        o[0] = m[0];
+        o[1] = m[1];
+        o[2] = m[2];
+      }
+      else
+      {
+        const gboolean in_hole = hole_row && i >= G.first_hole
+          && ((i - G.first_hole) % G.pitch) < G.hole_w;
+        const double *c = in_hole ? hole : black;
+        o[0] = c[0];
+        o[1] = c[1];
+        o[2] = c[2];
+      }
+      o[3] = 1.0f;
+      o += 4;
+    }
+  }
+
+  // the edge marking, centered in the bottom band
+  if(d->film_caption[0])
+  {
+    _yiyin_text_row_t cap;
+    const double font_px = (double)G.band * (d->film_caption_size / 100.0);
+    _yiyin_render_text_row(d->film_caption, font_px, TRUE, &cap);
+    if(cap.coverage)
+    {
+      const int left = MAX(0, (cw - cap.w) / 2);
+      const int top = G.band + ih + MAX(0, (G.band - cap.h) / 2);
+      _yiyin_composite_text_rows(out, cw, ch, &cap, 1, &left, &top);
+      _yiyin_free_text_row(&cap);
+    }
+  }
+}
+
 #ifdef HAVE_OPENCL
+
+// pack the placed rows into one float4 coverage texture (each row blitted
+// to its own offset inside the union bbox) and return the bbox destination
+// on the plane
+static void _yiyin_pack_text_tex(const _yiyin_text_row_t *rows, const int *const row_left,
+                                 const int *const row_top, const int n,
+                                 float **tex_out, int *tex_w, int *tex_h,
+                                 int *dest_x, int *dest_y)
+{
+  *tex_out = NULL;
+  int min_x = INT_MAX, min_y = INT_MAX, max_x = INT_MIN, max_y = INT_MIN;
+  gboolean any = FALSE;
+  for(int r = 0; r < n; r++)
+  {
+    if(!rows[r].coverage) continue;
+    any = TRUE;
+    min_x = MIN(min_x, row_left[r]);
+    min_y = MIN(min_y, row_top[r]);
+    max_x = MAX(max_x, row_left[r] + rows[r].w);
+    max_y = MAX(max_y, row_top[r] + rows[r].h);
+  }
+  if(!any || max_x <= min_x || max_y <= min_y) return;
+  const int tw = max_x - min_x, th = max_y - min_y;
+  float *tex = calloc((size_t)tw * th * 4, sizeof(float));
+  if(!tex) return;
+  for(int r = 0; r < n; r++)
+  {
+    if(!rows[r].coverage) continue;
+    const int ox = row_left[r] - min_x, oy = row_top[r] - min_y;
+    for(int y = 0; y < rows[r].h; y++)
+    {
+      const float *src = rows[r].coverage + (size_t)y * rows[r].w;
+      float *dst = tex + ((size_t)(y + oy) * tw + ox) * 4;
+      for(int x = 0; x < rows[r].w; x++)
+      {
+        dst[0] = src[x];
+        dst[1] = src[x];
+        dst[2] = src[x];
+        dst[3] = 1.0f;
+        dst += 4;
+      }
+    }
+  }
+  *tex_out = tex;
+  *tex_w = tw;
+  *tex_h = th;
+  *dest_x = min_x;
+  *dest_y = min_y;
+}
+
+static cl_mem _yiyin_upload_tex(const int devid, const float *tex, const int tw, const int th)
+{
+  cl_mem m = dt_opencl_alloc_device(devid, tw, th, 4 * sizeof(float));
+  if(m && dt_opencl_write_host_to_image(devid, tex, m, tw, th, 4 * sizeof(float)) != CL_SUCCESS)
+  {
+    dt_opencl_release_mem_object(m);
+    m = NULL;
+  }
+  return m;
+}
+
+// composite the text texture over a bbox of the plane: copy the bbox aside,
+// run the text_over kernel writing back into the plane, release the copy
+static cl_int _yiyin_cl_text_over(dt_iop_yiyin_global_data_t *gd, const int devid,
+                                  cl_mem dev_out, cl_mem dev_tex,
+                                  const int tex_w, const int tex_h,
+                                  const int dest_x, const int dest_y,
+                                  const int plane_w, const int plane_h)
+{
+  const int bx0 = MAX(0, dest_x), by0 = MAX(0, dest_y);
+  const int bx1 = MIN(plane_w, dest_x + tex_w), by1 = MIN(plane_h, dest_y + tex_h);
+  if(bx1 <= bx0 || by1 <= by0) return CL_SUCCESS;
+  const int bw = bx1 - bx0, bh = by1 - by0;
+  cl_mem dev_tmp = dt_opencl_alloc_device(devid, bw, bh, 4 * sizeof(float));
+  if(!dev_tmp) return CL_MEM_OBJECT_ALLOCATION_FAILURE;
+  const size_t src_origin[3] = { bx0, by0, 0 };
+  const size_t dst_origin[3] = { 0, 0, 0 };
+  const size_t region[3] = { bw, bh, 1 };
+  cl_int err = dt_opencl_enqueue_copy_image(devid, dev_out, dev_tmp, src_origin, dst_origin,
+                                            region);
+  if(err == CL_SUCCESS)
+    err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_yiyin_text_over, bw, bh,
+                                           CLARG(dev_tmp), CLARG(dev_out), CLARG(dev_tex),
+                                           CLARG(bx0), CLARG(by0),
+                                           CLARG(dest_x), CLARG(dest_y),
+                                           CLARG(tex_w), CLARG(tex_h));
+  dt_opencl_release_mem_object(dev_tmp);
+  return err;
+}
+
+// the film strip on device: one geometric composite pass, then the edge
+// marking text rendered on the host and composited over the bottom band
+static cl_int _yiyin_process_film_cl(dt_iop_yiyin_global_data_t *gd, const int devid,
+                                     cl_mem dev_in, cl_mem dev_out,
+                                     const dt_iop_roi_t *const roi_in,
+                                     const dt_iop_roi_t *const roi_out,
+                                     const dt_iop_yiyin_data_t *d)
+{
+  _yiyin_film_geom_t G;
+  _yiyin_film_geom(&G, roi_in->width, roi_in->height, d);
+  const int cw = roi_out->width, ch = roi_out->height;
+  const float black_r = (float)G.black[0], black_g = (float)G.black[1], black_b = (float)G.black[2];
+  const float hole_r = (float)G.hole[0], hole_g = (float)G.hole[1], hole_b = (float)G.hole[2];
+
+  cl_int err = dt_opencl_enqueue_kernel_2d_args
+    (devid, gd->kernel_yiyin_film_composite, cw, ch,
+     CLARG(dev_in), CLARG(dev_out),
+     CLARG(roi_in->width), CLARG(roi_in->height),
+     CLARG(cw), CLARG(ch),
+     CLARG(G.band), CLARG(G.hole_y0), CLARG(G.hole_y1),
+     CLARG(G.hole_w), CLARG(G.pitch), CLARG(G.first_hole),
+     CLARG(black_r), CLARG(black_g), CLARG(black_b),
+     CLARG(hole_r), CLARG(hole_g), CLARG(hole_b));
+  if(err != CL_SUCCESS) return err;
+
+  if(d->film_caption[0])
+  {
+    _yiyin_text_row_t cap;
+    const double font_px = (double)G.band * (d->film_caption_size / 100.0);
+    _yiyin_render_text_row(d->film_caption, font_px, TRUE, &cap);
+    if(cap.coverage)
+    {
+      const int left = MAX(0, (cw - cap.w) / 2);
+      const int top = G.band + roi_in->height + MAX(0, (G.band - cap.h) / 2);
+      float *tex = NULL;
+      int tex_w = 0, tex_h = 0, tex_x = 0, tex_y = 0;
+      _yiyin_pack_text_tex(&cap, &left, &top, 1, &tex, &tex_w, &tex_h, &tex_x, &tex_y);
+      if(tex)
+      {
+        cl_mem dev_tex = _yiyin_upload_tex(devid, tex, tex_w, tex_h);
+        if(dev_tex)
+        {
+          err = _yiyin_cl_text_over(gd, devid, dev_out, dev_tex, tex_w, tex_h,
+                                    tex_x, tex_y, cw, ch);
+          dt_opencl_release_mem_object(dev_tex);
+        }
+        dt_free_align(tex);
+      }
+      _yiyin_free_text_row(&cap);
+    }
+  }
+  return err;
+}
+
 int process_cl(dt_iop_module_t *self,
                dt_dev_pixelpipe_iop_t *piece,
                cl_mem dev_in,
@@ -786,8 +1419,34 @@ int process_cl(dt_iop_module_t *self,
                                         region);
   }
 
+  if(d->style == DT_IOP_YIYIN_STYLE_FILM)
+    return _yiyin_process_film_cl(gd, devid, dev_in, dev_out, roi_in, roi_out, d);
+
+  // the picture info rows: rendered on the host (pango), packed, uploaded,
+  // composited over the finished plane
+  _yiyin_text_row_t rows[2];
+  rows[0].coverage = rows[1].coverage = NULL;
+  rows[0].w = rows[0].h = rows[1].w = rows[1].h = 0;
+  int rows_h[2] = { 0, 0 };
+  int n_rows = 0;
+  if(d->text_show && d->backdrop == DT_IOP_YIYIN_BACKDROP_BLUR)
+  {
+    n_rows = 2;
+    int pw1 = 0, ph1 = 0;
+    _yiyin_pass1_canvas(roi_in->width, roi_in->height, d, &pw1, &ph1);
+    const double font_px = (double)pw1 * (d->text_size / 100.0);
+    const dt_image_t *img = &piece->pipe->image;
+    char *t1 = _yiyin_expand_pattern(d->text_model, img);
+    char *t2 = _yiyin_expand_pattern(d->text_params, img);
+    _yiyin_render_text_row(t1, font_px * 1.36, TRUE, &rows[0]);
+    _yiyin_render_text_row(t2, font_px, TRUE, &rows[1]);
+    g_free(t1);
+    g_free(t2);
+    for(int r = 0; r < 2; r++) rows_h[r] = rows[r].coverage ? rows[r].h : 0;
+  }
+
   _yiyin_layout_t L;
-  _yiyin_layout(&L, roi_in->width, roi_in->height, d);
+  _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_h, n_rows);
   const int cw = roi_out->width, ch = roi_out->height;
 
   // composite/SDF geometry, output-plane px
@@ -977,6 +1636,29 @@ int process_cl(dt_iop_module_t *self,
      CLARG(pw), CLARG(ph),
      CLARG(sub_x), CLARG(sub_y), CLARG(sub_w), CLARG(sub_h));
 
+  // 5. the picture info rows over the composited plane
+  if(err == CL_SUCCESS && n_rows)
+  {
+    int row_left[2], row_top[2];
+    _yiyin_stack_text_rows(rows, 2, cw, ch, L.text_bottom, row_left, row_top);
+    float *tex = NULL;
+    int tex_w = 0, tex_h = 0, tex_x = 0, tex_y = 0;
+    _yiyin_pack_text_tex(rows, row_left, row_top, 2, &tex, &tex_w, &tex_h, &tex_x, &tex_y);
+    if(tex)
+    {
+      cl_mem dev_tex = _yiyin_upload_tex(devid, tex, tex_w, tex_h);
+      if(dev_tex)
+      {
+        const cl_int e = _yiyin_cl_text_over(gd, devid, dev_out, dev_tex, tex_w, tex_h,
+                                             tex_x, tex_y, cw, ch);
+        if(e != CL_SUCCESS) err = e;
+        dt_opencl_release_mem_object(dev_tex);
+      }
+      dt_free_align(tex);
+    }
+  }
+  for(int r = 0; r < 2; r++) _yiyin_free_text_row(&rows[r]);
+
 finish:
   if(dev_proxy) dt_opencl_release_mem_object(dev_proxy);
   if(dev_proxy2) dt_opencl_release_mem_object(dev_proxy2);
@@ -993,6 +1675,8 @@ void init_global(dt_iop_module_so_t *self)
   gd->kernel_yiyin_composite = dt_opencl_create_kernel(program, "yiyin_composite");
   gd->kernel_yiyin_shadow_sdf = dt_opencl_create_kernel(program, "yiyin_shadow_sdf");
   gd->kernel_yiyin_downsample = dt_opencl_create_kernel(program, "yiyin_downsample");
+  gd->kernel_yiyin_film_composite = dt_opencl_create_kernel(program, "yiyin_film_composite");
+  gd->kernel_yiyin_text_over = dt_opencl_create_kernel(program, "yiyin_text_over");
 }
 
 void cleanup_global(dt_iop_module_so_t *self)
@@ -1003,6 +1687,8 @@ void cleanup_global(dt_iop_module_so_t *self)
     dt_opencl_free_kernel(gd->kernel_yiyin_composite);
     dt_opencl_free_kernel(gd->kernel_yiyin_shadow_sdf);
     dt_opencl_free_kernel(gd->kernel_yiyin_downsample);
+    dt_opencl_free_kernel(gd->kernel_yiyin_film_composite);
+    dt_opencl_free_kernel(gd->kernel_yiyin_text_over);
   }
   free(self->data);
   self->data = NULL;
@@ -1068,11 +1754,80 @@ void color_picker_apply(dt_iop_module_t *self, GtkWidget *picker,
   dt_dev_add_history_item(darktable.develop, self, TRUE);
 }
 
+// show/hide the sections: film widgets only in film style; the yiyin
+// backdrop widgets only in yiyin style; the info rows only for the blurred
+// yiyin backdrop, their patterns only when the rows are on
+static void _gui_showhide(dt_iop_module_t *self)
+{
+  dt_iop_yiyin_gui_data_t *g = self->gui_data;
+  dt_iop_yiyin_params_t *p = self->params;
+
+  const gboolean yiyin = p->style == DT_IOP_YIYIN_STYLE_YIYIN;
+  gtk_widget_set_visible(g->backdrop, yiyin);
+  gtk_widget_set_visible(g->fill_color, yiyin);
+  gtk_widget_set_visible(g->blur_amount, yiyin);
+  gtk_widget_set_visible(g->adaptive_backdrop, yiyin);
+  gtk_widget_set_visible(g->main_image_width_rate, yiyin);
+  gtk_widget_set_visible(g->mini_top_bottom_margin, yiyin);
+  gtk_widget_set_visible(g->aspect_w, yiyin);
+  gtk_widget_set_visible(g->aspect_h, yiyin);
+  gtk_widget_set_visible(g->landscape_output, yiyin);
+  gtk_widget_set_visible(g->corner_radius, yiyin);
+  gtk_widget_set_visible(g->shadow, yiyin);
+
+  const gboolean rows = yiyin && p->backdrop == DT_IOP_YIYIN_BACKDROP_BLUR;
+  gtk_widget_set_visible(g->text_show, rows);
+  gtk_widget_set_visible(g->text_model, rows && p->text_show);
+  gtk_widget_set_visible(g->text_params, rows && p->text_show);
+  gtk_widget_set_visible(g->text_size, rows && p->text_show);
+
+  gtk_widget_set_visible(g->film_band, !yiyin);
+  gtk_widget_set_visible(g->film_caption, !yiyin);
+  gtk_widget_set_visible(g->film_caption_size, !yiyin);
+}
+
+static void _style_changed(GtkWidget *widget, dt_iop_module_t *self)
+{
+  dt_iop_yiyin_params_t *p = self->params;
+  p->style = dt_bauhaus_combobox_get(widget);
+  _gui_showhide(self);
+  dt_dev_add_history_item(darktable.develop, self, TRUE);
+}
+
+static void _showhide_changed(GtkWidget *widget, dt_iop_module_t *self)
+{
+  _gui_showhide(self);
+}
+
+// commit a pattern entry on Enter (or focus leave); per-keystroke history
+// items would flood the stack
+static void _text_entry_activate(GtkEntry *entry, dt_iop_module_t *self)
+{
+  dt_iop_yiyin_params_t *p = self->params;
+  dt_iop_yiyin_gui_data_t *g = self->gui_data;
+  const char *t = gtk_entry_get_text(entry);
+  if(entry == GTK_ENTRY(g->text_model))
+    g_strlcpy(p->text_model, t ? t : "", sizeof(p->text_model));
+  else if(entry == GTK_ENTRY(g->text_params))
+    g_strlcpy(p->text_params, t ? t : "", sizeof(p->text_params));
+  else if(entry == GTK_ENTRY(g->film_caption))
+    g_strlcpy(p->film_caption, t ? t : "", sizeof(p->film_caption));
+  dt_dev_add_history_item(darktable.develop, self, TRUE);
+}
+
+static gboolean _text_entry_focus_out(GtkWidget *widget, GdkEventFocus *event,
+                                      dt_iop_module_t *self)
+{
+  _text_entry_activate(GTK_ENTRY(widget), self);
+  return FALSE;
+}
+
 void gui_update(dt_iop_module_t *self)
 {
   dt_iop_yiyin_gui_data_t *g = self->gui_data;
   dt_iop_yiyin_params_t *p = self->params;
 
+  dt_bauhaus_combobox_set(g->style, p->style);
   dt_bauhaus_combobox_set(g->backdrop, p->backdrop);
   GdkRGBA c = { p->fill_color[0], p->fill_color[1], p->fill_color[2], 1.0 };
   gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(g->fill_color), &c);
@@ -1085,14 +1840,27 @@ void gui_update(dt_iop_module_t *self)
   dt_bauhaus_toggle_set(g->landscape_output, p->landscape_output);
   dt_bauhaus_slider_set(g->corner_radius, p->corner_radius);
   dt_bauhaus_slider_set(g->shadow, p->shadow);
+  dt_bauhaus_toggle_set(g->text_show, p->text_show);
+  gtk_entry_set_text(GTK_ENTRY(g->text_model), p->text_model);
+  gtk_entry_set_text(GTK_ENTRY(g->text_params), p->text_params);
+  dt_bauhaus_slider_set(g->text_size, p->text_size);
+  dt_bauhaus_slider_set(g->film_band, p->film_band);
+  gtk_entry_set_text(GTK_ENTRY(g->film_caption), p->film_caption);
+  dt_bauhaus_slider_set(g->film_caption_size, p->film_caption_size);
+  _gui_showhide(self);
 }
 
 void gui_init(dt_iop_module_t *self)
 {
   dt_iop_yiyin_gui_data_t *g = IOP_GUI_ALLOC(yiyin);
 
+  g->style = dt_bauhaus_combobox_from_params(self, "style");
+  gtk_widget_set_tooltip_text(g->style, _("yiyin backdrop, or a film strip frame"));
+  g_signal_connect_after(G_OBJECT(g->style), "value-changed", G_CALLBACK(_style_changed), self);
+
   g->backdrop = dt_bauhaus_combobox_from_params(self, "backdrop");
   gtk_widget_set_tooltip_text(g->backdrop, _("fill the backdrop band with a solid color or a blurred copy of the picture"));
+  g_signal_connect_after(G_OBJECT(g->backdrop), "value-changed", G_CALLBACK(_showhide_changed), self);
 
   GdkRGBA color = { 1.0, 1.0, 1.0, 1.0 };
   g->fill_color = gtk_color_button_new_with_rgba(&color);
@@ -1137,6 +1905,46 @@ void gui_init(dt_iop_module_t *self)
   g->shadow = dt_bauhaus_slider_from_params(self, "shadow");
   dt_bauhaus_slider_set_format(g->shadow, "%");
   gtk_widget_set_tooltip_text(g->shadow, _("drop shadow width as a share of the picture height"));
+
+  // the picture info rows, available for the blurred backdrop
+  g->text_show = dt_bauhaus_toggle_from_params(self, "text_show");
+  gtk_widget_set_tooltip_text(g->text_show, _("print the picture info below the picture"));
+  g_signal_connect_after(G_OBJECT(g->text_show), "value-changed", G_CALLBACK(_showhide_changed), self);
+
+  g->text_model = gtk_entry_new();
+  gtk_entry_set_placeholder_text(GTK_ENTRY(g->text_model), "{Make} {Model}");
+  gtk_widget_set_tooltip_text(g->text_model, _("the first info row; placeholders: {Make} {Model} {Lens} {FocalLength} {FocalLengthIn35mmFormat} {FNumber} {ExposureTime} {ISO} -- commit with Enter"));
+  g_signal_connect(G_OBJECT(g->text_model), "activate", G_CALLBACK(_text_entry_activate), self);
+  g_signal_connect(G_OBJECT(g->text_model), "focus-out-event", G_CALLBACK(_text_entry_focus_out), self);
+  gtk_box_pack_start(GTK_BOX(self->widget), g->text_model, TRUE, TRUE, 0);
+
+  g->text_params = gtk_entry_new();
+  gtk_entry_set_placeholder_text(GTK_ENTRY(g->text_params),
+                                 "{FocalLengthIn35mmFormat}mm f/{FNumber} {ExposureTime}s ISO{ISO}");
+  gtk_widget_set_tooltip_text(g->text_params, _("the second info row, same placeholders -- commit with Enter"));
+  g_signal_connect(G_OBJECT(g->text_params), "activate", G_CALLBACK(_text_entry_activate), self);
+  g_signal_connect(G_OBJECT(g->text_params), "focus-out-event", G_CALLBACK(_text_entry_focus_out), self);
+  gtk_box_pack_start(GTK_BOX(self->widget), g->text_params, TRUE, TRUE, 0);
+
+  g->text_size = dt_bauhaus_slider_from_params(self, "text_size");
+  dt_bauhaus_slider_set_format(g->text_size, "%");
+  gtk_widget_set_tooltip_text(g->text_size, _("the info text size as a share of the canvas width"));
+
+  // the film strip widgets
+  g->film_band = dt_bauhaus_slider_from_params(self, "film_band");
+  dt_bauhaus_slider_set_format(g->film_band, "%");
+  gtk_widget_set_tooltip_text(g->film_band, _("the black band width above and below the picture"));
+
+  g->film_caption = gtk_entry_new();
+  gtk_entry_set_placeholder_text(GTK_ENTRY(g->film_caption), _("film edge marking"));
+  gtk_widget_set_tooltip_text(g->film_caption, _("the film edge marking text in the bottom band -- commit with Enter"));
+  g_signal_connect(G_OBJECT(g->film_caption), "activate", G_CALLBACK(_text_entry_activate), self);
+  g_signal_connect(G_OBJECT(g->film_caption), "focus-out-event", G_CALLBACK(_text_entry_focus_out), self);
+  gtk_box_pack_start(GTK_BOX(self->widget), g->film_caption, TRUE, TRUE, 0);
+
+  g->film_caption_size = dt_bauhaus_slider_from_params(self, "film_caption_size");
+  dt_bauhaus_slider_set_format(g->film_caption_size, "%");
+  gtk_widget_set_tooltip_text(g->film_caption_size, _("the edge marking size as a share of the band width"));
 }
 
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.sh

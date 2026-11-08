@@ -153,3 +153,65 @@ yiyin_composite(read_only image2d_t main_tex,
   o.a = 1.0f; // the canvas is opaque
   write_imagef(out, gid, o);
 }
+
+// the film strip: picture 1:1 between two black bands, a centered row of
+// light-box holes per band; the edge marking is composited separately
+kernel void
+yiyin_film_composite(read_only image2d_t main_tex,
+                     write_only image2d_t out,
+                     const int main_w, const int main_h,
+                     const int output_w, const int output_h,
+                     const int band,
+                     const int hole_y0, const int hole_y1,
+                     const int hole_w, const int pitch, const int first_hole,
+                     const float black_r, const float black_g, const float black_b,
+                     const float hole_r, const float hole_g, const float hole_b)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+  if(x >= output_w || y >= output_h) return;
+  const int pic_y = y - band;
+  if(pic_y >= 0 && pic_y < main_h)
+  {
+    float4 m = read_imagef(main_tex, CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST,
+                           (int2)(x, pic_y));
+    m.a = 1.0f;
+    write_imagef(out, (int2)(x, y), m);
+    return;
+  }
+  // in a band; both bands use the same hole range
+  const int band_ly = y < band ? y : y - band - main_h;
+  float4 o;
+  if(band_ly >= hole_y0 && band_ly < hole_y1
+     && x >= first_hole && ((x - first_hole) % pitch) < hole_w)
+    o = (float4)(hole_r, hole_g, hole_b, 1.0f);
+  else
+    o = (float4)(black_r, black_g, black_b, 1.0f);
+  write_imagef(out, (int2)(x, y), o);
+}
+
+// mix the white-glyph coverage texture over the plane inside a bbox; the
+// caller copies the bbox aside and hands it back as `in`
+kernel void
+yiyin_text_over(read_only image2d_t in,
+                write_only image2d_t out,
+                read_only image2d_t tex,
+                const int bbox_x, const int bbox_y,
+                const int dest_x, const int dest_y,
+                const int tex_w, const int tex_h)
+{
+  const int gx = get_global_id(0);
+  const int gy = get_global_id(1);
+  const int ax = bbox_x + gx;
+  const int ay = bbox_y + gy;
+  float4 p = read_imagef(in, CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST, (int2)(gx, gy));
+  const int tx = ax - dest_x;
+  const int ty = ay - dest_y;
+  if(tx >= 0 && ty >= 0 && tx < tex_w && ty < tex_h)
+  {
+    const float a = clamp(read_imagef(tex, CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST,
+                                      (int2)(tx, ty)).r, 0.0f, 1.0f);
+    p.rgb = mix(p.rgb, (float3)(1.0f), a);
+  }
+  write_imagef(out, (int2)(ax, ay), p);
+}

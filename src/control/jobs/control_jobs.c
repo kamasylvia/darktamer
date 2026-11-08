@@ -3217,15 +3217,23 @@ static int32_t _prewarm_job_run(dt_job_t *job)
 
     const dt_imgid_t imgid = GPOINTER_TO_INT(l->data);
 
-    // generate the biggest grid level, then write it to the disk cache
-    // and drop it from memory immediately: the point is to fill the disk
-    // backend, not to hold ~1GB float frames in RAM (a CIRAW full slot
-    // is ~1GB). smaller mips are generated from the disk jpg without
-    // another full decode
-    dt_mipmap_buffer_t buf;
-    dt_mipmap_cache_get(&buf, imgid, DT_MIPMAP_8, DT_MIPMAP_BLOCKING, 'r');
-    dt_mipmap_cache_release(&buf);
-    dt_mipmap_cache_evict_at_size(imgid, DT_MIPMAP_8);
+    // generate every browsing level, then write them all to the disk
+    // cache and drop them from memory. mip8 costs the full decode;
+    // the smaller levels downsample from the still-in-memory larger
+    // one. evicting only mip8 was not enough: the lighttable grid reads
+    // mip4, which then missed disk *and* memory and triggered another
+    // full decode per visible thumbnail
+    static const dt_mipmap_size_t levels[] = {
+      DT_MIPMAP_8, DT_MIPMAP_4, DT_MIPMAP_2, DT_MIPMAP_1, DT_MIPMAP_0
+    };
+    for(size_t li = 0; li < sizeof(levels) / sizeof(levels[0]); li++)
+    {
+      dt_mipmap_buffer_t buf;
+      dt_mipmap_cache_get(&buf, imgid, levels[li], DT_MIPMAP_BLOCKING, 'r');
+      dt_mipmap_cache_release(&buf);
+    }
+    for(size_t li = 0; li < sizeof(levels) / sizeof(levels[0]); li++)
+      dt_mipmap_cache_evict_at_size(imgid, levels[li]);
 
     done++;
     char msg[80];

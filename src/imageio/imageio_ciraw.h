@@ -31,6 +31,11 @@ dt_imageio_retval_t dt_imageio_open_ciraw(dt_image_t *img, const char *filename,
 // first interactive decode does not pay the one-time Metal build
 void dt_ciraw_warmup_start(void);
 
+// mark the calling thread as a background decoder: its ciraw decodes go
+// through a separate single-slot gate so they never starve the
+// interactive path (call again with FALSE before the thread exits)
+void dt_ciraw_decode_set_background(gboolean background);
+
 G_END_DECLS
 
 // clang-format off

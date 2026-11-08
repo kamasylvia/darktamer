@@ -40,29 +40,48 @@
 static CIContext *ciraw_context = nil;
 static pthread_mutex_t ciraw_context_lock = PTHREAD_MUTEX_INITIALIZER;
 
-// decode concurrency cap: each in-flight decode holds a full-frame float
-// destination (~963MB for a 60MP raw) plus CoreImage working memory. The
-// mipmap job queue runs on up to a dozen threads and would otherwise spike
-// several GB during thumbnail regeneration on a 16G machine; two concurrent
-// decodes keep the GPU busy without the swap storm
-static dispatch_semaphore_t ciraw_decode_sem;
+// decode concurrency caps: each in-flight decode holds a full-frame float
+// destination (~963MB for a 60MP raw) plus CoreImage working memory. Two
+// classes keep the interactive path starvation-free: user-triggered
+// decodes (darkroom entry, filmstrip, visible thumbnails) share the
+// foreground semaphore (cache_ciraw_decodes, 1..8), while background
+// prewarm decodes squeeze through a single-slot background semaphore -
+// without the split, the prewarm loop re-acquires the gate instantly
+// between images and starves darkroom entry for tens of seconds
+static dispatch_semaphore_t ciraw_fg_sem;
+static dispatch_semaphore_t ciraw_bg_sem;
+static pthread_key_t ciraw_bg_key;
+void dt_ciraw_decode_set_background(gboolean background)
+{
+  static dispatch_once_t key_once;
+  dispatch_once(&key_once, ^{
+    pthread_key_create(&ciraw_bg_key, NULL);
+  });
+  pthread_setspecific(ciraw_bg_key, (void *)(uintptr_t)(background ? 1 : 0));
+}
+
+static gboolean _ciraw_decode_is_background(void)
+{
+  return pthread_getspecific(ciraw_bg_key) != NULL;
+}
 
 static void _ciraw_decode_gate_enter(void)
 {
-  static dispatch_once_t once;
-  dispatch_once(&once, ^{
-    // clamped to 1..8 by the cache_ciraw_decodes config range
+  static dispatch_once_t sems_once;
+  dispatch_once(&sems_once, ^{
     int conf = dt_conf_get_int("cache_ciraw_decodes");
     if(conf < 1) conf = 1;
     if(conf > 8) conf = 8;
-    ciraw_decode_sem = dispatch_semaphore_create(conf);
+    ciraw_fg_sem = dispatch_semaphore_create(conf);
+    ciraw_bg_sem = dispatch_semaphore_create(1);
   });
-  dispatch_semaphore_wait(ciraw_decode_sem, DISPATCH_TIME_FOREVER);
+  dispatch_semaphore_wait(_ciraw_decode_is_background() ? ciraw_bg_sem : ciraw_fg_sem,
+                          DISPATCH_TIME_FOREVER);
 }
 
 static void _ciraw_decode_gate_leave(void)
 {
-  dispatch_semaphore_signal(ciraw_decode_sem);
+  dispatch_semaphore_signal(_ciraw_decode_is_background() ? ciraw_bg_sem : ciraw_fg_sem);
 }
 
 static CIContext *_ciraw_shared_context(void)

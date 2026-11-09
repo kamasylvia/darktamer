@@ -1288,7 +1288,7 @@ endif(BUILD_TESTING)
 add_executable(darktable ${SUBSYSTEM_MACOSX} ${SUBSYSTEM_WIN32} main.c ${RESOURCE_OBJECT})
 set_target_properties(darktable PROPERTIES LINKER_LANGUAGE C)
 if(APPLE)
-  set_target_properties(lib_darktable PROPERTIES LINK_FLAGS "-framework Carbon -framework AppKit -framework Security")
+  set_target_properties(lib_darktable PROPERTIES LINK_FLAGS "-framework Carbon -framework AppKit -framework Security -framework CoreText")
 endif(APPLE)
 target_link_libraries(darktable lib_darktable)
 

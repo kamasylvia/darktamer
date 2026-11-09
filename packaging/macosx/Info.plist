@@ -9,11 +9,13 @@
 	<key>CFBundleIconFile</key>
 	<string>Icons.icns</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.darktable</string>
+	<string>org.darktamer.darktamer</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>darktable</string>
+	<string>Darktamer</string>
+	<key>CFBundleDisplayName</key>
+	<string>Darktamer</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

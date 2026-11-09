@@ -21,11 +21,15 @@ buildDir="${scriptDir}/../../build/macosx"
 
 cd "$buildDir"/
 
+# reruns collide with the previous attempt's leftovers and the final dmg
+rm -f ./*.dmg pack.temp.dmg
+rm -rf ./package
+
 # Generate symlink to applications folder for easier drag & drop within dmg
 ln -s /Applications ./package || true
 
 # copy macOS install background image
-mkdir ./package/.background
+mkdir -p ./package/.background
 cp "$scriptDir"/macos_install_background.png ./package/.background
 
 # When building on github runner, 'hdiutil create' occasionally fails (resource busy)

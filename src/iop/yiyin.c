@@ -392,56 +392,111 @@ static void _yiyin_film_geom(_yiyin_film_geom_t *G, const int img_w, const int i
 
 // ── picture info rows + film edge marking (pango text legs) ──────────────
 
-// expand one yiyin template pattern against the picture's exif. dt has no
-// stored 35mm-equivalent focal, so {FocalLengthIn35mmFormat} falls back to
-// the focal length times the crop factor when a crop is known.
+// append one placeholder's value; returns FALSE when the picture carries no
+// value for it (a manual lens reports focal 0 / f-number 0, a body may miss
+// tags). dt stores no explicit 35mm-equivalent focal, so that placeholder
+// derives it from the focal length times the crop factor.
+static gboolean _yiyin_exif_value(GString *out, const char *key, const dt_image_t *img)
+{
+  if(!g_strcmp0(key, "Make"))
+  {
+    if(!img->exif_maker[0]) return FALSE;
+    g_string_append(out, img->exif_maker);
+  }
+  else if(!g_strcmp0(key, "Model"))
+  {
+    if(!img->exif_model[0]) return FALSE;
+    g_string_append(out, img->exif_model);
+  }
+  else if(!g_strcmp0(key, "Lens"))
+  {
+    if(!img->exif_lens[0]) return FALSE;
+    g_string_append(out, img->exif_lens);
+  }
+  else if(!g_strcmp0(key, "FocalLength"))
+  {
+    if(img->exif_focal_length <= 0.0f) return FALSE;
+    g_string_append_printf(out, "%.0f", (double)img->exif_focal_length);
+  }
+  else if(!g_strcmp0(key, "FocalLengthIn35mmFormat"))
+  {
+    const double crop = img->exif_crop > 0.01f ? (double)img->exif_crop : 1.0;
+    const double focal35 = (double)img->exif_focal_length * crop;
+    if(focal35 <= 0.0) return FALSE;
+    g_string_append_printf(out, "%.0f", focal35);
+  }
+  else if(!g_strcmp0(key, "FNumber"))
+  {
+    if(img->exif_aperture <= 0.0f) return FALSE;
+    g_string_append_printf(out, "%.1f", (double)img->exif_aperture);
+  }
+  else if(!g_strcmp0(key, "ExposureTime"))
+  {
+    if(img->exif_exposure <= 0.0f) return FALSE;
+    char *e = dt_util_format_exposure(img->exif_exposure);
+    g_string_append(out, e);
+    g_free(e);
+  }
+  else if(!g_strcmp0(key, "ISO"))
+  {
+    if(img->exif_iso <= 0.0f) return FALSE;
+    g_string_append_printf(out, "%.0f", (double)img->exif_iso);
+  }
+  else
+  {
+    // an unknown placeholder stays visible: a silent drop would hide a typo
+    g_string_append_c(out, '{');
+    g_string_append(out, key);
+    g_string_append_c(out, '}');
+  }
+  return TRUE;
+}
+
+// expand one yiyin template pattern against the picture's exif. A
+// space-separated token holding an unavailable placeholder is dropped whole,
+// so a manual-lens shot prints "1/1000s ISO200" rather than "mm f/0.0 ...".
 static char *_yiyin_expand_pattern(const char *pattern, const dt_image_t *img)
 {
-  GString *s = g_string_sized_new(128);
+  GString *result = g_string_sized_new(128);
   const char *p = pattern;
+  gboolean first_token = TRUE;
   while(*p)
   {
-    if(*p != '{')
+    while(*p == ' ') p++;
+    if(!*p) break;
+    const char *tok_end = strchr(p, ' ');
+    if(!tok_end) tok_end = p + strlen(p);
+
+    GString *tok = g_string_sized_new(32);
+    gboolean complete = TRUE;
+    const char *q = p;
+    while(q < tok_end)
     {
-      g_string_append_c(s, *p++);
-      continue;
+      if(*q != '{')
+      {
+        g_string_append_c(tok, *q++);
+        continue;
+      }
+      const char *end = memchr(q, '}', tok_end - q);
+      if(!end) break; // unclosed brace: the literal tail is dropped
+      char key[32];
+      const size_t klen = MIN((size_t)(end - q - 1), sizeof(key) - 1);
+      memcpy(key, q + 1, klen);
+      key[klen] = '\0';
+      if(!_yiyin_exif_value(tok, key, img)) complete = FALSE;
+      q = end + 1;
     }
-    const char *end = strchr(p, '}');
-    if(!end)
+
+    if(complete && tok->len > 0)
     {
-      g_string_append(s, p);
-      break;
+      if(!first_token) g_string_append_c(result, ' ');
+      g_string_append_len(result, tok->str, tok->len);
+      first_token = FALSE;
     }
-    char key[32];
-    const size_t klen = MIN((size_t)(end - p - 1), sizeof(key) - 1);
-    memcpy(key, p + 1, klen);
-    key[klen] = '\0';
-    if(!g_strcmp0(key, "Make") && img->exif_maker[0])
-      g_string_append(s, img->exif_maker);
-    else if(!g_strcmp0(key, "Model") && img->exif_model[0])
-      g_string_append(s, img->exif_model);
-    else if(!g_strcmp0(key, "Lens") && img->exif_lens[0])
-      g_string_append(s, img->exif_lens);
-    else if(!g_strcmp0(key, "FocalLength"))
-      g_string_append_printf(s, "%.0f", (double)img->exif_focal_length);
-    else if(!g_strcmp0(key, "FocalLengthIn35mmFormat"))
-    {
-      const double crop = img->exif_crop > 0.01f ? (double)img->exif_crop : 1.0;
-      g_string_append_printf(s, "%.0f", (double)img->exif_focal_length * crop);
-    }
-    else if(!g_strcmp0(key, "FNumber"))
-      g_string_append_printf(s, "%.1f", (double)img->exif_aperture);
-    else if(!g_strcmp0(key, "ExposureTime"))
-    {
-      char *e = dt_util_format_exposure(img->exif_exposure);
-      g_string_append(s, e);
-      g_free(e);
-    }
-    else if(!g_strcmp0(key, "ISO"))
-      g_string_append_printf(s, "%.0f", (double)img->exif_iso);
-    p = end + 1;
+    g_string_free(tok, TRUE);
+    p = tok_end;
   }
-  return g_string_free(s, FALSE);
+  return g_string_free(result, FALSE);
 }
 
 // render one text line into a white-glyph coverage bitmap. The pango/cairo

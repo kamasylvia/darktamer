@@ -46,7 +46,11 @@
 
 #include <pango/pangocairo.h>
 
-DT_MODULE_INTROSPECTION(6, dt_iop_borders_params_t)
+#ifdef __APPLE__
+#include <CoreText/CoreText.h>
+#endif
+
+DT_MODULE_INTROSPECTION(7, dt_iop_borders_params_t)
 
 // Module constants
 #define DT_IOP_BORDERS_ASPECT_IMAGE_VALUE 0.0f
@@ -168,9 +172,17 @@ typedef struct dt_iop_borders_params_t
   int text_rows;            /* how many info rows to print (0-3)
                                $MIN: 0 $MAX: 3 $DEFAULT: 3 $DESCRIPTION: "info row count" */
   char text_lens[64];       /* picture info row 2 DEFAULT: "{Lens}" */
-  char text_font[64];       /* info rows font DEFAULT: "Sans Bold" */
-  char film_font[64];       /* film edge marking font DEFAULT: "Sans Bold" */
+  char text_font[64];       /* info rows font, a PostScript name DEFAULT: "Sans Bold" */
+  char film_font[64];       /* film edge marking font, a PostScript name DEFAULT: "Sans Bold" */
   float film_caption_color[3]; /* film edge marking color $DEFAULT: 1.0 $DESCRIPTION: "film text color" */
+  float text_size1;         /* info row 1 size as a share of the canvas width
+                               $MIN: 0.5 $MAX: 6.0 $DEFAULT: 3.0 $DESCRIPTION: "row 1 size" */
+  float text_size2;         /* info row 2 size as a share of the canvas width
+                               $MIN: 0.5 $MAX: 6.0 $DEFAULT: 2.2 $DESCRIPTION: "row 2 size" */
+  float text_size3;         /* info row 3 size as a share of the canvas width
+                               $MIN: 0.5 $MAX: 6.0 $DEFAULT: 2.2 $DESCRIPTION: "row 3 size" */
+  float text_opacity;       /* info text opacity
+                               $MIN: 0.0 $MAX: 100.0 $DEFAULT: 100.0 $DESCRIPTION: "info text opacity" */
 } dt_iop_borders_params_t;
 
 typedef struct dt_iop_borders_gui_data_t
@@ -210,7 +222,10 @@ typedef struct dt_iop_borders_gui_data_t
   GtkWidget *text_params;
   GtkWidget *text_rows;
   GtkWidget *text_font;
-  GtkWidget *text_size;
+  GtkWidget *text_size1;
+  GtkWidget *text_size2;
+  GtkWidget *text_size3;
+  GtkWidget *text_opacity;
   GtkWidget *film_band;
   GtkWidget *film_caption;
   GtkWidget *film_font;
@@ -486,6 +501,77 @@ int legacy_params(dt_iop_module_t *self,
     *new_params = n;
     *new_params_size = sizeof(dt_iop_borders_params_t);
     *new_version = 6;
+    return 0;
+  }
+
+  // v6 -> v7: the single info text size splits into three per-row sizes
+  // (the old leading 1.36x becomes row 1's own size) and an opacity joins
+  if(old_version == 6)
+  {
+    typedef struct dt_iop_borders_params_v6_t
+    {
+      float color[3];
+      float aspect;
+      char aspect_text[20];
+      dt_iop_orientation_t aspect_orient;
+      float size;
+      float pos_h;
+      char pos_h_text[20];
+      float pos_v;
+      char pos_v_text[20];
+      float frame_size;
+      float frame_offset;
+      float frame_color[3];
+      gboolean max_border_size;
+      dt_iop_basis_t basis;
+      dt_iop_borders_mode_t mode;
+      dt_iop_borders_backdrop_t backdrop;
+      float blur_amount;
+      gboolean adaptive_backdrop;
+      float main_image_width_rate;
+      float mini_top_bottom_margin;
+      int aspect_w;
+      int aspect_h;
+      gboolean landscape_output;
+      float corner_radius;
+      float shadow;
+      float text_bottom_offset;
+      gboolean text_show;
+      char text_model[64];
+      char text_params[96];
+      float text_size;
+      float film_band;
+      char film_caption[64];
+      float film_caption_size;
+      int text_rows;
+      char text_lens[64];
+      char text_font[64];
+      char film_font[64];
+      float film_caption_color[3];
+    } dt_iop_borders_params_v6_t;
+
+    const dt_iop_borders_params_v6_t *o = old_params;
+    dt_iop_borders_params_t *n = calloc(1, sizeof(dt_iop_borders_params_t));
+
+    // everything before the split copies in order
+    memcpy(n, o, offsetof(dt_iop_borders_params_v6_t, text_size));
+    g_strlcpy(n->text_model, o->text_model, sizeof(n->text_model));
+    g_strlcpy(n->text_params, o->text_params, sizeof(n->text_params));
+    g_strlcpy(n->text_font, o->text_font, sizeof(n->text_font));
+    n->text_size1 = o->text_size * 1.36f;
+    n->text_size2 = o->text_size;
+    n->text_size3 = o->text_size;
+    n->text_opacity = 100.0f;
+    n->film_band = o->film_band;
+    g_strlcpy(n->film_caption, o->film_caption, sizeof(n->film_caption));
+    n->film_caption_size = o->film_caption_size;
+    n->text_rows = o->text_rows;
+    g_strlcpy(n->text_lens, o->text_lens, sizeof(n->text_lens));
+    g_strlcpy(n->film_font, o->film_font, sizeof(n->film_font));
+    memcpy(n->film_caption_color, o->film_caption_color, sizeof(n->film_caption_color));
+    *new_params = n;
+    *new_params_size = sizeof(dt_iop_borders_params_t);
+    *new_version = 7;
     return 0;
   }
 
@@ -885,16 +971,61 @@ static char *_yiyin_expand_pattern(const char *pattern, const dt_image_t *img)
 // the pango layout for one text row; metrics and render MUST share it, or
 // the measured row and the rendered bitmap drift apart by a pixel and the
 // canvas reserved for the text misses it
+// resolve a font the way code editors do: by PostScript name. On macOS the
+// name goes through CoreText, which knows the system fonts by their PS
+// identifiers ("STHeitiSC-Light", "KaitiSC-Regular", "PingFangSC-Semibold",
+// ...), and the family plus weight traits come back out as a Pango
+// description. Without CoreText the name is handed to Pango verbatim.
+static void _yiyin_resolve_font(const char *name, char *out, const int out_len)
+{
+  snprintf(out, out_len, "%s", (name && *name) ? name : "Sans Bold");
+#ifdef __APPLE__
+  CFStringRef ps = CFStringCreateWithCString(kCFAllocatorDefault, out, kCFStringEncodingUTF8);
+  CTFontRef font = CTFontCreateWithName(ps, 12.0, NULL);
+  CFRelease(ps);
+
+  CFStringRef fam_ref = CTFontCopyFamilyName(font);
+  char family[128] = "";
+  const Boolean got_fam = CFStringGetCString(fam_ref, family, sizeof(family),
+                                             kCFStringEncodingUTF8);
+  CFRelease(fam_ref);
+  if(!got_fam || !family[0]) { CFRelease(font); return; }
+
+  char style[24] = "";
+  if(CTFontGetSymbolicTraits(font) & kCTFontTraitBold)
+    snprintf(style, sizeof(style), " Bold");
+  else
+  {
+    float w = -1.0f;
+    CFDictionaryRef tr = CTFontCopyTraits(font);
+    if(tr)
+    {
+      CFNumberRef wn = CFDictionaryGetValue(tr, kCTFontWeightTrait);
+      if(wn) CFNumberGetValue(wn, kCFNumberFloat32Type, &w);
+      CFRelease(tr);
+    }
+    if(w <= -0.3f)      snprintf(style, sizeof(style), " Light");
+    else if(w >= 0.6f)  snprintf(style, sizeof(style), " Heavy");
+    else if(w >= 0.4f)  snprintf(style, sizeof(style), " Semibold");
+    else if(w >= 0.15f) snprintf(style, sizeof(style), " Medium");
+  }
+  CFRelease(font);
+  snprintf(out, out_len, "%s%s", family, style);
+#endif
+}
+
 static PangoLayout *_yiyin_text_layout_new(const char *text, const double size_px,
                                            const char *fontdesc,
                                            PangoContext **ctx_out,
                                            PangoFontDescription **fd_out)
 {
+  char resolved[128];
+  _yiyin_resolve_font(fontdesc, resolved, sizeof(resolved));
   PangoFontMap *fontmap = pango_cairo_font_map_get_default();
   PangoContext *context = pango_font_map_create_context(fontmap);
   PangoLayout *layout = pango_layout_new(context);
   PangoFontDescription *fd
-    = pango_font_description_from_string(fontdesc && *fontdesc ? fontdesc : "Sans Bold");
+    = pango_font_description_from_string(resolved);
   pango_font_description_set_absolute_size(fd, (gint)(size_px * PANGO_SCALE));
   pango_layout_set_font_description(layout, fd);
   pango_layout_set_text(layout, text, -1);
@@ -1032,7 +1163,6 @@ static void _yiyin_plan_rows(_yiyin_rows_plan_t *plan, const int img_w, const in
 
   int pw1 = 0, ph1 = 0;
   _yiyin_pass1_canvas(img_w, img_h, d, &pw1, &ph1);
-  const double font_px = (double)pw1 * (d->text_size / 100.0);
   const int max_row_w = MAX(64, (int)((double)img_w * YIYIN_ROW_MAX_RATE));
 
   plan->n = CLAMP(d->text_rows, 0, YIYIN_MAX_ROWS);
@@ -1040,9 +1170,8 @@ static void _yiyin_plan_rows(_yiyin_rows_plan_t *plan, const int img_w, const in
   plan->text[0] = _yiyin_expand_pattern(d->text_model, img);
   plan->text[1] = plan->n > 1 ? _yiyin_expand_pattern(d->text_lens, img) : NULL;
   plan->text[2] = plan->n > 2 ? _yiyin_expand_pattern(d->text_params, img) : NULL;
-  // the make/model line leads at yiyin's 3% against the 2.2% parameter rows
-  const double weight[YIYIN_MAX_ROWS] = { 1.36, 1.0, 1.0 };
-  for(int r = 0; r < plan->n; r++) plan->font_px[r] = font_px * weight[r];
+  const float row_size[YIYIN_MAX_ROWS] = { d->text_size1, d->text_size2, d->text_size3 };
+  for(int r = 0; r < plan->n; r++) plan->font_px[r] = (double)pw1 * (row_size[r] / 100.0);
 
   for(int r = 0; r < plan->n; r++)
   {
@@ -1101,7 +1230,8 @@ static void _yiyin_stack_text_rows(const _yiyin_text_row_t *rows, const int n_ro
 static void _yiyin_composite_text_rows(float *const plane, const int plane_w, const int plane_h,
                                        const _yiyin_text_row_t *rows, const int n_rows,
                                        const int *const row_left, const int *const row_top,
-                                       const float *const text_color)
+                                       const float *const text_color,
+                                       const float text_opacity)
 {
   for(int r = 0; r < n_rows; r++)
   {
@@ -1118,7 +1248,7 @@ static void _yiyin_composite_text_rows(float *const plane, const int plane_w, co
       float *dst = plane + ((size_t)y * plane_w + x0) * 4;
       for(int x = x0; x < x1; x++)
       {
-        const float a = src[x - row_left[r]];
+        const float a = src[x - row_left[r]] * text_opacity;
         dst[0] += (text_color[0] - dst[0]) * a;
         dst[1] += (text_color[1] - dst[1]) * a;
         dst[2] += (text_color[2] - dst[2]) * a;
@@ -1185,7 +1315,7 @@ static void _yiyin_process_film(const float *const in, float *const out,
     {
       const int left = MAX(0, (cw - cap.w) / 2);
       const int top = G.band + ih + MAX(0, (G.band - cap.h) / 2);
-      _yiyin_composite_text_rows(out, cw, ch, &cap, 1, &left, &top, d->film_caption_color);
+      _yiyin_composite_text_rows(out, cw, ch, &cap, 1, &left, &top, d->film_caption_color, 1.0f);
       _yiyin_free_text_row(&cap);
     }
   }
@@ -1551,7 +1681,8 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
     int row_left[YIYIN_MAX_ROWS], row_top[YIYIN_MAX_ROWS];
     _yiyin_stack_text_rows(rows, n_rows, cw, ch, L.text_bottom, row_left, row_top);
     const float white[3] = { 1.0f, 1.0f, 1.0f };
-    _yiyin_composite_text_rows(out, cw, ch, rows, n_rows, row_left, row_top, white);
+    _yiyin_composite_text_rows(out, cw, ch, rows, n_rows, row_left, row_top, white,
+                               d->text_opacity);
   }
   for(int r = 0; r < 2; r++) _yiyin_free_text_row(&rows[r]);
 
@@ -1630,7 +1761,8 @@ static cl_int _yiyin_cl_text_over(dt_iop_borders_global_data_t *gd, const int de
                                   const int tex_w, const int tex_h,
                                   const int dest_x, const int dest_y,
                                   const int plane_w, const int plane_h,
-                                  const float *const text_color)
+                                  const float *const text_color,
+                                  const float text_opacity)
 {
   const int bx0 = MAX(0, dest_x), by0 = MAX(0, dest_y);
   const int bx1 = MIN(plane_w, dest_x + tex_w), by1 = MIN(plane_h, dest_y + tex_h);
@@ -1650,7 +1782,7 @@ static cl_int _yiyin_cl_text_over(dt_iop_borders_global_data_t *gd, const int de
                                            CLARG(dest_x), CLARG(dest_y),
                                            CLARG(tex_w), CLARG(tex_h),
                                            CLARG(text_color[0]), CLARG(text_color[1]),
-                                           CLARG(text_color[2]));
+                                           CLARG(text_color[2]), CLARG(text_opacity));
   dt_opencl_release_mem_object(dev_tmp);
   return err;
 }
@@ -1698,7 +1830,7 @@ static cl_int _yiyin_process_film_cl(dt_iop_borders_global_data_t *gd, const int
         if(dev_tex)
         {
           err = _yiyin_cl_text_over(gd, devid, dev_out, dev_tex, tex_w, tex_h,
-                                    tex_x, tex_y, cw, ch, d->film_caption_color);
+                                    tex_x, tex_y, cw, ch, d->film_caption_color, 1.0f);
           dt_opencl_release_mem_object(dev_tex);
         }
         dt_free_align(tex);
@@ -1953,7 +2085,7 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
       {
         const float white[3] = { 1.0f, 1.0f, 1.0f };
         const cl_int e = _yiyin_cl_text_over(gd, devid, dev_out, dev_tex, tex_w, tex_h,
-                                             tex_x, tex_y, cw, ch, white);
+                                             tex_x, tex_y, cw, ch, white, d->text_opacity);
         if(e != CL_SUCCESS) err = e;
         dt_opencl_release_mem_object(dev_tex);
       }
@@ -2592,6 +2724,9 @@ void init(dt_iop_module_t *self)
   g_strlcpy(d->film_caption, "KODAK PORTRA 400", sizeof(d->film_caption));
   g_strlcpy(d->film_font, "Sans Bold", sizeof(d->film_font));
   d->film_caption_color[0] = d->film_caption_color[1] = d->film_caption_color[2] = 1.0f;
+  d->text_size1 = 3.0f;
+  d->text_size2 = d->text_size3 = 2.2f;
+  d->text_opacity = 100.0f;
 }
 
 void init_presets(dt_iop_module_so_t *self)
@@ -2630,6 +2765,10 @@ void init_presets(dt_iop_module_so_t *self)
         .text_rows = 3,
         .text_lens = "{Lens}",
         .text_font = "Sans Bold",
+        .text_size1 = 3.0f,
+        .text_size2 = 2.2f,
+        .text_size3 = 2.2f,
+        .text_opacity = 100.0f,
         .film_font = "Sans Bold",
         .film_caption_color = { 1.0f, 1.0f, 1.0f } };
   g_strlcpy(p.aspect_text, "3:2", sizeof(p.aspect_text));
@@ -2780,7 +2919,10 @@ static void _mode_showhide(dt_iop_module_t *self)
   gtk_widget_set_visible(g->text_lens, rows && p->text_rows >= 2);
   gtk_widget_set_visible(g->text_params, rows && p->text_rows >= 3);
   gtk_widget_set_visible(g->text_font, rows);
-  gtk_widget_set_visible(g->text_size, rows);
+  gtk_widget_set_visible(g->text_size1, rows && p->text_rows >= 1);
+  gtk_widget_set_visible(g->text_size2, rows && p->text_rows >= 2);
+  gtk_widget_set_visible(g->text_size3, rows && p->text_rows >= 3);
+  gtk_widget_set_visible(g->text_opacity, rows);
 
   const gboolean film = p->mode == DT_IOP_BORDERS_MODE_FILM;
   gtk_widget_set_visible(g->film_band, film);
@@ -3004,7 +3146,10 @@ void gui_update(dt_iop_module_t *self)
   gtk_entry_set_text(GTK_ENTRY(g->text_params), p->text_params);
   dt_bauhaus_slider_set(g->text_rows, p->text_rows);
   gtk_entry_set_text(GTK_ENTRY(g->text_font), p->text_font);
-  dt_bauhaus_slider_set(g->text_size, p->text_size);
+  dt_bauhaus_slider_set(g->text_size1, p->text_size1);
+  dt_bauhaus_slider_set(g->text_size2, p->text_size2);
+  dt_bauhaus_slider_set(g->text_size3, p->text_size3);
+  dt_bauhaus_slider_set(g->text_opacity, p->text_opacity);
   dt_bauhaus_slider_set(g->film_band, p->film_band);
   gtk_entry_set_text(GTK_ENTRY(g->film_caption), p->film_caption);
   gtk_entry_set_text(GTK_ENTRY(g->film_font), p->film_font);
@@ -3107,17 +3252,29 @@ void gui_init(dt_iop_module_t *self)
                    G_CALLBACK(_text_entry_focus_out), self);
   dt_gui_box_add(self->widget, g->text_params);
 
-  g->text_font = gtk_entry_new();
+  g->text_size1 = dt_bauhaus_slider_from_params(self, "text_size1");
+  dt_bauhaus_slider_set_format(g->text_size1, "%");
+  gtk_widget_set_tooltip_text(g->text_size1, _("info row 1 (make and model) size as a share of the canvas width"));
+
+  g->text_size2 = dt_bauhaus_slider_from_params(self, "text_size2");
+  dt_bauhaus_slider_set_format(g->text_size2, "%");
+  gtk_widget_set_tooltip_text(g->text_size2, _("info row 2 (lens) size as a share of the canvas width"));
+
+  g->text_size3 = dt_bauhaus_slider_from_params(self, "text_size3");
+  dt_bauhaus_slider_set_format(g->text_size3, "%");
+  gtk_widget_set_tooltip_text(g->text_size3, _("info row 3 (exposure) size as a share of the canvas width"));
+
+  g->text_opacity = dt_bauhaus_slider_from_params(self, "text_opacity");
+  dt_bauhaus_slider_set_format(g->text_opacity, "%");
+  gtk_widget_set_tooltip_text(g->text_opacity, _("the opacity of all three info rows"));
+
+  g->text_font = gtk_entry_new_with_buffer(gtk_entry_buffer_new("", -1));
   gtk_entry_set_placeholder_text(GTK_ENTRY(g->text_font), "Sans Bold");
-  gtk_widget_set_tooltip_text(g->text_font, _("the info rows font, a Pango font description like \"Futura Medium\" -- commit with Enter"));
+  gtk_widget_set_tooltip_text(g->text_font, _("the font for all three info rows, a Pango font description -- try \"Heiti SC\" (黑体), \"Kaiti SC\" (楷体), \"Songti SC\" (宋体), \"PingFang SC\" -- commit with Enter"));
   g_signal_connect(G_OBJECT(g->text_font), "activate", G_CALLBACK(_text_entry_activate), self);
   g_signal_connect(G_OBJECT(g->text_font), "focus-out-event",
                    G_CALLBACK(_text_entry_focus_out), self);
   dt_gui_box_add(self->widget, g->text_font);
-
-  g->text_size = dt_bauhaus_slider_from_params(self, "text_size");
-  dt_bauhaus_slider_set_format(g->text_size, "%");
-  gtk_widget_set_tooltip_text(g->text_size, _("the info text size as a share of the canvas width"));
 
   g->film_band = dt_bauhaus_slider_from_params(self, "film_band");
   dt_bauhaus_slider_set_format(g->film_band, "%");

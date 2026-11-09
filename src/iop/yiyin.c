@@ -278,15 +278,21 @@ static void _yiyin_pass1_canvas(const int img_w, const int img_h,
   *ph = (int)bg_h;
 }
 
-// yiyin-style layout. rows_h = the rendered text-row heights in canvas px
-// (top-most row first, yiyin template list order); empty when the info rows
-// are off. The film strip layout never goes through here.
+// yiyin-style layout. rows_w/rows_h = the measured text-row dims in canvas
+// px (top-most row first, yiyin template list order); zero rows when the
+// info rows are off. rows_w drives the canvas width: a text row wider than
+// the picture grows the frame rather than being clipped. The film strip
+// layout never goes through here.
 static void _yiyin_layout(_yiyin_layout_t *L,
                           const int img_w, const int img_h,
                           const dt_iop_yiyin_data_t *d,
-                          const int *const rows_h, const int n_rows)
+                          const int *const rows_w, const int *const rows_h,
+                          const int n_rows)
 {
   const double w = img_w, h = img_h;
+  int max_row_w = 0;
+  for(int r = 0; r < n_rows; r++)
+    if(rows_w[r] > max_row_w) max_row_w = rows_w[r];
 
   // step 1: the aspect/landscape reset
   double reset_w = w, reset_h = h;
@@ -347,6 +353,14 @@ static void _yiyin_layout(_yiyin_layout_t *L,
   if(w / bg_w > main_rate)
   {
     bg_w = ceil(w / main_rate);
+    bg_h = ceil(bg_w / wh_rate);
+  }
+
+  // the text rows may be wider than the picture: widen the canvas (and
+  // re-derive the height from the same aspect) so nothing is clipped
+  if(max_row_w > bg_w)
+  {
+    bg_w = (double)max_row_w;
     bg_h = ceil(bg_w / wh_rate);
   }
 
@@ -499,6 +513,62 @@ static char *_yiyin_expand_pattern(const char *pattern, const dt_image_t *img)
   return g_string_free(result, FALSE);
 }
 
+// cairo/pixman refuse image surfaces past their dimension limits, and the
+// failure path hands back an error surface whose data pointer is NULL.
+// Nothing here may exceed it, however long the pattern text gets.
+#define YIYIN_TEXT_MAX_DIM 16000
+
+// the pango layout for one text row; metrics and render MUST share it, or
+// the measured row and the rendered bitmap drift apart by a pixel and the
+// canvas reserved for the text misses it
+static PangoLayout *_yiyin_text_layout_new(const char *text, const double size_px,
+                                           const gboolean bold,
+                                           PangoContext **ctx_out,
+                                           PangoFontDescription **fd_out)
+{
+  PangoFontMap *fontmap = pango_cairo_font_map_get_default();
+  PangoContext *context = pango_font_map_create_context(fontmap);
+  PangoLayout *layout = pango_layout_new(context);
+  PangoFontDescription *fd = pango_font_description_from_string(bold ? "Sans Bold" : "Sans");
+  pango_font_description_set_absolute_size(fd, (gint)(size_px * PANGO_SCALE));
+  pango_layout_set_font_description(layout, fd);
+  pango_layout_set_text(layout, text, -1);
+  *ctx_out = context;
+  *fd_out = fd;
+  return layout;
+}
+
+static void _yiyin_text_layout_free(PangoLayout *layout, PangoContext *context,
+                                    PangoFontDescription *fd)
+{
+  g_object_unref(layout);
+  g_object_unref(context);
+  pango_font_description_free(fd);
+}
+
+// measure one text row without rasterizing it: the ROI planner runs on
+// every pipe evaluation and must not allocate a surface for the text it is
+// only reserving room for. This reports the TRUE size even past the surface
+// limit: the planner has to see the overrun to scale the row back down. Only
+// a size the measurement cannot produce at all (no text, degenerate font)
+// reports zero.
+static void _yiyin_text_metrics(const char *text, const double size_px,
+                                const gboolean bold, int *w, int *h)
+{
+  *w = *h = 0;
+  if(!text || !*text || size_px < 2.0 || size_px > 1.0e6) return;
+
+  PangoContext *context = NULL;
+  PangoFontDescription *fd = NULL;
+  PangoLayout *layout = _yiyin_text_layout_new(text, size_px, bold, &context, &fd);
+  int tw = 0, th = 0;
+  pango_layout_get_pixel_size(layout, &tw, &th);
+  _yiyin_text_layout_free(layout, context, fd);
+  if(tw < 1 || th < 1) return;
+  *w = tw + 2;
+  *h = th + 2;
+}
+
 // render one text line into a white-glyph coverage bitmap. The pango/cairo
 // pair below is premultiplied ARGB32 with white glyphs, whose un-premultiplied
 // encoded color is exactly 1.0 -- so the composite mix toward linear white by
@@ -509,28 +579,28 @@ static void _yiyin_render_text_row(const char *text, const double size_px,
 {
   row->coverage = NULL;
   row->w = row->h = 0;
-  if(!text || !*text || size_px < 2.0) return;
+  if(!text || !*text || size_px < 2.0 || size_px > YIYIN_TEXT_MAX_DIM) return;
 
-  PangoFontMap *fontmap = pango_cairo_font_map_get_default();
-  PangoContext *context = pango_font_map_create_context(fontmap);
-  PangoLayout *layout = pango_layout_new(context);
-  PangoFontDescription *fd = pango_font_description_from_string(bold ? "Sans Bold" : "Sans");
-  pango_font_description_set_absolute_size(fd, (gint)(size_px * PANGO_SCALE));
-  pango_layout_set_font_description(layout, fd);
-  pango_layout_set_text(layout, text, -1);
+  PangoContext *context = NULL;
+  PangoFontDescription *fd = NULL;
+  PangoLayout *layout = _yiyin_text_layout_new(text, size_px, bold, &context, &fd);
 
   int tw = 0, th = 0;
   pango_layout_get_pixel_size(layout, &tw, &th);
-  if(tw < 1 || th < 1)
+  if(tw < 1 || th < 1 || tw > YIYIN_TEXT_MAX_DIM || th > YIYIN_TEXT_MAX_DIM)
   {
-    g_object_unref(layout);
-    g_object_unref(context);
-    pango_font_description_free(fd);
+    _yiyin_text_layout_free(layout, context, fd);
     return;
   }
   const int w = tw + 2, h = th + 2;
 
   cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+  if(cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS)
+  {
+    cairo_surface_destroy(surf);
+    _yiyin_text_layout_free(layout, context, fd);
+    return;
+  }
   cairo_t *cr = cairo_create(surf);
   cairo_set_source_rgb(cr, 1.0, 1.0, 1.0);
   cairo_move_to(cr, 1.0, 1.0);
@@ -538,10 +608,12 @@ static void _yiyin_render_text_row(const char *text, const double size_px,
   cairo_destroy(cr);
   cairo_surface_flush(surf);
 
-  float *cov = dt_alloc_align_float((size_t)w * h);
+  // an error surface has no data: the guard above catches the dimension
+  // cases, this one catches whatever cairo refuses for its own reasons
+  const guint8 *data = cairo_image_surface_get_data(surf);
+  float *cov = data ? dt_alloc_align_float((size_t)w * h) : NULL;
   if(cov)
   {
-    const guint8 *data = cairo_image_surface_get_data(surf);
     const int stride = cairo_image_surface_get_stride(surf);
     for(int y = 0; y < h; y++)
     {
@@ -555,9 +627,7 @@ static void _yiyin_render_text_row(const char *text, const double size_px,
     row->h = h;
   }
   cairo_surface_destroy(surf);
-  g_object_unref(layout);
-  g_object_unref(context);
-  pango_font_description_free(fd);
+  _yiyin_text_layout_free(layout, context, fd);
 }
 
 static void _yiyin_free_text_row(_yiyin_text_row_t *row)
@@ -567,11 +637,76 @@ static void _yiyin_free_text_row(_yiyin_text_row_t *row)
   row->w = row->h = 0;
 }
 
+// the row planner: both the ROI sizing and the render must agree on the
+// font sizes, the expanded texts and the measured metrics, so this is the
+// ONE place that decides them. `metrics` receives the measured row dims
+// (list order); widths also feed the canvas width so an overlong row widens
+// the frame instead of being clipped.
+typedef struct _yiyin_rows_plan_t
+{
+  char *text[2];
+  double font_px[2]; // the size each row is both MEASURED and RENDERED at
+  int w[2], h[2];
+  int n;
+  int max_w;
+} _yiyin_rows_plan_t;
+
+// a text row is fitted to the picture's own width, which the yiyin canvas
+// is always at least as wide as: the text shrinks to the frame rather than
+// the frame growing to a paragraph, so the reserved canvas stays bounded
+// however much text is pasted in
+#define YIYIN_ROW_MAX_RATE 1.0
+
+static void _yiyin_plan_rows(_yiyin_rows_plan_t *plan, const int img_w, const int img_h,
+                             const dt_iop_yiyin_data_t *d, const dt_image_t *img)
+{
+  memset(plan, 0, sizeof(*plan));
+  if(!d->text_show || d->backdrop != DT_IOP_YIYIN_BACKDROP_BLUR) return;
+
+  int pw1 = 0, ph1 = 0;
+  _yiyin_pass1_canvas(img_w, img_h, d, &pw1, &ph1);
+  const double font_px = (double)pw1 * (d->text_size / 100.0);
+  const int max_row_w = MAX(64, (int)((double)img_w * YIYIN_ROW_MAX_RATE));
+
+  plan->n = 2;
+  plan->text[0] = _yiyin_expand_pattern(d->text_model, img);
+  plan->text[1] = _yiyin_expand_pattern(d->text_params, img);
+  // row 1 = the make/model line (yiyin size 3%), row 2 = the params line
+  // (size 2.2%): one slider, ratio kept
+  plan->font_px[0] = font_px * 1.36;
+  plan->font_px[1] = font_px;
+
+  for(int r = 0; r < plan->n; r++)
+  {
+    _yiyin_text_metrics(plan->text[r], plan->font_px[r], TRUE, &plan->w[r], &plan->h[r]);
+    // shrink to fit the cap rather than dropping the row. Advance is not
+    // perfectly linear in the size, so re-measure and repeat until the row
+    // actually fits (each pass moves the estimate closer; the loop is
+    // bounded in case a font refuses to cooperate).
+    for(int pass = 0; pass < 8 && plan->w[r] > max_row_w && plan->w[r] > 0; pass++)
+    {
+      const double scale = (double)max_row_w / (double)plan->w[r] * 0.98;
+      plan->font_px[r] = MAX(2.0, plan->font_px[r] * scale);
+      _yiyin_text_metrics(plan->text[r], plan->font_px[r], TRUE, &plan->w[r], &plan->h[r]);
+    }
+    if(plan->w[r] > plan->max_w) plan->max_w = plan->w[r];
+  }
+}
+
+static void _yiyin_free_rows_plan(_yiyin_rows_plan_t *plan)
+{
+  for(int r = 0; r < plan->n; r++)
+  {
+    g_free(plan->text[r]);
+    plan->text[r] = NULL;
+  }
+  plan->n = 0;
+}
+
 // the yiyin bottom-slot stacking (composite :300-319 + the :543-545
 // last-row inflation quirk): the LIST-LAST row sits at the canvas bottom,
-// every earlier row above at round(prevTop - h). Returns the first (bottom)
-// row's top so the caller knows where the block landed; row_top[i] receives
-// each input row's top (list order).
+// every earlier row above at round(prevTop - h). row_top[i] receives each
+// input row's top (list order).
 static void _yiyin_stack_text_rows(const _yiyin_text_row_t *rows, const int n_rows,
                                    const int canvas_w, const int canvas_h,
                                    const double bottom_offset_px,
@@ -757,8 +892,22 @@ void modify_roi_out(dt_iop_module_t *self,
     return;
   }
 
+  // the text rows widen the canvas when they overrun the picture, so the
+  // ROI must measure them too: plan here exactly as process does, or the
+  // reserved plane will be too small for what gets drawn
+  int rows_w[2] = { 0, 0 }, rows_h[2] = { 0, 0 };
+  _yiyin_rows_plan_t plan;
+  _yiyin_plan_rows(&plan, roi_in->width, roi_in->height, d, &piece->pipe->image);
+  for(int r = 0; r < plan.n; r++)
+  {
+    rows_w[r] = plan.w[r];
+    rows_h[r] = plan.h[r];
+  }
+  const int n_rows = plan.n;
+  _yiyin_free_rows_plan(&plan);
+
   _yiyin_layout_t L;
-  _yiyin_layout(&L, roi_in->width, roi_in->height, d, NULL, 0);
+  _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_w, rows_h, n_rows);
 
   roi_out->x = 0;
   roi_out->y = 0;
@@ -799,7 +948,7 @@ gboolean distort_transform(dt_iop_module_t *self,
   if(_yiyin_is_identity(d)) return TRUE;
 
   _yiyin_layout_t L;
-  _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d, NULL, 0);
+  _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d, NULL, NULL, 0);
 
   float *const pts = DT_IS_ALIGNED(points);
   DT_OMP_FOR(if(points_count > 100))
@@ -820,7 +969,7 @@ gboolean distort_backtransform(dt_iop_module_t *self,
   if(_yiyin_is_identity(d)) return TRUE;
 
   _yiyin_layout_t L;
-  _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d, NULL, 0);
+  _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d, NULL, NULL, 0);
 
   float *const pts = DT_IS_ALIGNED(points);
   DT_OMP_FOR(if(points_count > 100))
@@ -848,7 +997,7 @@ void distort_mask(dt_iop_module_t *self,
   }
 
   _yiyin_layout_t L;
-  _yiyin_layout(&L, roi_in->width, roi_in->height, d, NULL, 0);
+  _yiyin_layout(&L, roi_in->width, roi_in->height, d, NULL, NULL, 0);
   // the full picture rect carries the mask (corner rounding is a render
   // detail, masks stay rectangular)
   const int bx = CLAMP(L.main_left, 0, roi_out->width - roi_in->width);
@@ -1098,33 +1247,32 @@ void process(dt_iop_module_t *self,
     return;
   }
 
-  // the picture info rows: font-sized on the pass-1 canvas, rendered, then
-  // fed to the layout as heights (yiyin sizes fonts before knowing the rows)
+  // the picture info rows: the planner sizes the fonts and measures the
+  // texts, the render rasterizes them from the SAME plan so the reserved
+  // canvas and the drawn bitmaps cannot disagree
   _yiyin_text_row_t rows[2];
   rows[0].coverage = rows[1].coverage = NULL;
   rows[0].w = rows[0].h = rows[1].w = rows[1].h = 0;
-  int rows_h[2] = { 0, 0 };
-  int n_rows = 0;
-  if(d->text_show && d->backdrop == DT_IOP_YIYIN_BACKDROP_BLUR)
+  int rows_w[2] = { 0, 0 }, rows_h[2] = { 0, 0 };
+  _yiyin_rows_plan_t plan;
+  _yiyin_plan_rows(&plan, roi_in->width, roi_in->height, d, &piece->pipe->image);
+  const int n_rows = plan.n;
+  if(n_rows)
   {
-    n_rows = 2;
-    int pw1 = 0, ph1 = 0;
-    _yiyin_pass1_canvas(roi_in->width, roi_in->height, d, &pw1, &ph1);
-    // row 1 = the make/model line (yiyin size 3%), row 2 = the params line
-    // (size 2.2%): one slider, ratio kept
-    const double font_px = (double)pw1 * (d->text_size / 100.0);
-    const dt_image_t *img = &piece->pipe->image;
-    char *t1 = _yiyin_expand_pattern(d->text_model, img);
-    char *t2 = _yiyin_expand_pattern(d->text_params, img);
-    _yiyin_render_text_row(t1, font_px * 1.36, TRUE, &rows[0]);
-    _yiyin_render_text_row(t2, font_px, TRUE, &rows[1]);
-    g_free(t1);
-    g_free(t2);
-    for(int r = 0; r < 2; r++) rows_h[r] = rows[r].coverage ? rows[r].h : 0;
+    // the plan's sizes, never a recomputation: a row it shrank to fit the
+    // frame cap must be rendered at the size it was measured at
+    _yiyin_render_text_row(plan.text[0], plan.font_px[0], TRUE, &rows[0]);
+    _yiyin_render_text_row(plan.text[1], plan.font_px[1], TRUE, &rows[1]);
+    for(int r = 0; r < n_rows; r++)
+    {
+      rows_w[r] = rows[r].coverage ? rows[r].w : 0;
+      rows_h[r] = rows[r].coverage ? rows[r].h : 0;
+    }
   }
+  _yiyin_free_rows_plan(&plan);
 
   _yiyin_layout_t L;
-  _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_h, n_rows);
+  _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_w, rows_h, n_rows);
   const int cw = roi_out->width, ch = roi_out->height;
 
   // 1. the blur proxy (blur mode only)
@@ -1477,31 +1625,30 @@ int process_cl(dt_iop_module_t *self,
   if(d->style == DT_IOP_YIYIN_STYLE_FILM)
     return _yiyin_process_film_cl(gd, devid, dev_in, dev_out, roi_in, roi_out, d);
 
-  // the picture info rows: rendered on the host (pango), packed, uploaded,
-  // composited over the finished plane
+  // the picture info rows: the planner sizes the fonts and measures the
+  // texts, the render rasterizes them from the SAME plan so the reserved
+  // canvas and the drawn bitmaps cannot disagree
   _yiyin_text_row_t rows[2];
   rows[0].coverage = rows[1].coverage = NULL;
   rows[0].w = rows[0].h = rows[1].w = rows[1].h = 0;
-  int rows_h[2] = { 0, 0 };
-  int n_rows = 0;
-  if(d->text_show && d->backdrop == DT_IOP_YIYIN_BACKDROP_BLUR)
+  int rows_w[2] = { 0, 0 }, rows_h[2] = { 0, 0 };
+  _yiyin_rows_plan_t plan;
+  _yiyin_plan_rows(&plan, roi_in->width, roi_in->height, d, &piece->pipe->image);
+  const int n_rows = plan.n;
+  if(n_rows)
   {
-    n_rows = 2;
-    int pw1 = 0, ph1 = 0;
-    _yiyin_pass1_canvas(roi_in->width, roi_in->height, d, &pw1, &ph1);
-    const double font_px = (double)pw1 * (d->text_size / 100.0);
-    const dt_image_t *img = &piece->pipe->image;
-    char *t1 = _yiyin_expand_pattern(d->text_model, img);
-    char *t2 = _yiyin_expand_pattern(d->text_params, img);
-    _yiyin_render_text_row(t1, font_px * 1.36, TRUE, &rows[0]);
-    _yiyin_render_text_row(t2, font_px, TRUE, &rows[1]);
-    g_free(t1);
-    g_free(t2);
-    for(int r = 0; r < 2; r++) rows_h[r] = rows[r].coverage ? rows[r].h : 0;
+    _yiyin_render_text_row(plan.text[0], plan.font_px[0], TRUE, &rows[0]);
+    _yiyin_render_text_row(plan.text[1], plan.font_px[1], TRUE, &rows[1]);
+    for(int r = 0; r < n_rows; r++)
+    {
+      rows_w[r] = rows[r].coverage ? rows[r].w : 0;
+      rows_h[r] = rows[r].coverage ? rows[r].h : 0;
+    }
   }
+  _yiyin_free_rows_plan(&plan);
 
   _yiyin_layout_t L;
-  _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_h, n_rows);
+  _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_w, rows_h, n_rows);
   const int cw = roi_out->width, ch = roi_out->height;
 
   // composite/SDF geometry, output-plane px

@@ -198,7 +198,8 @@ yiyin_text_over(read_only image2d_t in,
                 read_only image2d_t tex,
                 const int bbox_x, const int bbox_y,
                 const int dest_x, const int dest_y,
-                const int tex_w, const int tex_h)
+                const int tex_w, const int tex_h,
+                const float text_r, const float text_g, const float text_b)
 {
   const int gx = get_global_id(0);
   const int gy = get_global_id(1);
@@ -211,7 +212,7 @@ yiyin_text_over(read_only image2d_t in,
   {
     const float a = clamp(read_imagef(tex, CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST,
                                       (int2)(tx, ty)).r, 0.0f, 1.0f);
-    p.rgb = mix(p.rgb, (float3)(1.0f), a);
+    p.rgb = mix(p.rgb, (float3)(text_r, text_g, text_b), a);
   }
   write_imagef(out, (int2)(ax, ay), p);
 }

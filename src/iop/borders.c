@@ -134,8 +134,8 @@ typedef struct dt_iop_borders_params_t
   dt_iop_borders_backdrop_t backdrop; // $DEFAULT: DT_IOP_BORDERS_BACKDROP_SOLID $DESCRIPTION: "backdrop"
   float blur_amount;                  /* blurred backdrop strength
                                $MIN: 0.0 $MAX: 200.0 $DEFAULT: 100.0 $DESCRIPTION: "blur strength" */
-  int adaptive_backdrop;    /* dim a bright blurred backdrop
-                               $DEFAULT: 1 $DESCRIPTION: "dim a bright backdrop" */
+  gboolean adaptive_backdrop; /* dim a bright blurred backdrop
+                               $DEFAULT: TRUE $DESCRIPTION: "dim a bright backdrop" */
   float main_image_width_rate;        /* picture width as a share of the canvas width
                                $MIN: 20.0 $MAX: 100.0 $DEFAULT: 90.0 $DESCRIPTION: "picture width" */
   float mini_top_bottom_margin;       /* minimal margin above and below the picture
@@ -144,16 +144,16 @@ typedef struct dt_iop_borders_params_t
                                $MIN: 0 $MAX: 10000 $DEFAULT: 0 $DESCRIPTION: "aspect width" */
   int aspect_h;             /* canvas aspect height; 0 keeps the picture aspect
                                $MIN: 0 $MAX: 10000 $DEFAULT: 0 $DESCRIPTION: "aspect height" */
-  int landscape_output;     /* swap the canvas to landscape orientation
-                               $DEFAULT: 0 $DESCRIPTION: "landscape output" */
+  gboolean landscape_output; /* swap the canvas to landscape orientation
+                               $DEFAULT: FALSE $DESCRIPTION: "landscape output" */
   float corner_radius;      /* rounds the picture corners by a share of its height
                                $MIN: 0.0 $MAX: 50.0 $DEFAULT: 2.1 $DESCRIPTION: "corner radius" */
   float shadow;             /* drop shadow width as a share of the picture height
                                $MIN: 0.0 $MAX: 50.0 $DEFAULT: 6.0 $DESCRIPTION: "shadow" */
   float text_bottom_offset; /* bottom text slot as a share of the canvas height
                                $MIN: 0.0 $MAX: 0.2 $DEFAULT: 0.027 $DESCRIPTION: "bottom reserve" */
-  int text_show;            /* print the picture info below the picture
-                               $DEFAULT: 0 $DESCRIPTION: "picture info rows" */
+  gboolean text_show;       /* print the picture info below the picture
+                               $DEFAULT: FALSE $DESCRIPTION: "picture info rows" */
   char text_model[64];      /* picture info row 1 DEFAULT: "{Make} {Model}" */
   char text_params[96];     /* picture info row 2 */
   float text_size;          /* info text size as a share of the canvas width
@@ -187,6 +187,7 @@ typedef struct dt_iop_borders_gui_data_t
   GtkWidget *colorpick_box;
   // mode + blur/film widgets
   GtkWidget *mode;
+  GtkWidget *backdrop;
   GtkWidget *blur_amount;
   GtkWidget *adaptive_backdrop;
   GtkWidget *main_image_width_rate;
@@ -2664,6 +2665,7 @@ static void _mode_showhide(dt_iop_module_t *self)
   gtk_widget_set_visible(g->colorpick_box, basic || blur);
   gtk_widget_set_visible(g->border_picker, basic);
 
+  gtk_widget_set_visible(g->backdrop, blur);
   gtk_widget_set_visible(g->blur_amount, blur);
   gtk_widget_set_visible(g->adaptive_backdrop, blur);
   gtk_widget_set_visible(g->main_image_width_rate, blur);
@@ -2860,6 +2862,7 @@ void gui_update(dt_iop_module_t *self)
   gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(g->frame_colorpick), &fc);
 
   dt_bauhaus_combobox_set(g->mode, p->mode);
+  dt_bauhaus_combobox_set(g->backdrop, p->backdrop);
   dt_bauhaus_slider_set(g->blur_amount, p->blur_amount);
   dt_bauhaus_toggle_set(g->adaptive_backdrop, p->adaptive_backdrop);
   dt_bauhaus_slider_set(g->main_image_width_rate, p->main_image_width_rate);
@@ -2889,6 +2892,11 @@ void gui_init(dt_iop_module_t *self)
   g->mode = dt_bauhaus_combobox_from_params(self, "mode");
   gtk_widget_set_tooltip_text(g->mode, _("basic border, yiyin backdrop, or a film strip"));
   g_signal_connect_after(G_OBJECT(g->mode), "value-changed", G_CALLBACK(_mode_changed), self);
+
+  g->backdrop = dt_bauhaus_combobox_from_params(self, "backdrop");
+  gtk_widget_set_tooltip_text(g->backdrop, _("fill the backdrop band with a solid color or a blurred copy of the picture"));
+  g_signal_connect_after(G_OBJECT(g->backdrop), "value-changed",
+                         G_CALLBACK(_mode_changed), self);
 
   g->blur_amount = dt_bauhaus_slider_from_params(self, "blur_amount");
   dt_bauhaus_slider_set_format(g->blur_amount, "%");

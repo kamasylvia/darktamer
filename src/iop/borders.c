@@ -2885,6 +2885,91 @@ void gui_init(dt_iop_module_t *self)
   dt_iop_borders_params_t *p = self->params;
   dt_iop_borders_params_t *dp = self->default_params;
 
+  // ── the frame modes ──
+  g->mode = dt_bauhaus_combobox_from_params(self, "mode");
+  gtk_widget_set_tooltip_text(g->mode, _("basic border, yiyin backdrop, or a film strip"));
+  g_signal_connect_after(G_OBJECT(g->mode), "value-changed", G_CALLBACK(_mode_changed), self);
+
+  g->blur_amount = dt_bauhaus_slider_from_params(self, "blur_amount");
+  dt_bauhaus_slider_set_format(g->blur_amount, "%");
+  gtk_widget_set_tooltip_text(g->blur_amount, _("how strongly the blurred backdrop is blurred"));
+
+  g->adaptive_backdrop = dt_bauhaus_toggle_from_params(self, "adaptive_backdrop");
+  gtk_widget_set_tooltip_text(g->adaptive_backdrop, _("dim a bright blurred backdrop so the picture stands out"));
+  g_signal_connect_after(G_OBJECT(g->adaptive_backdrop), "value-changed",
+                         G_CALLBACK(_showhide_changed), self);
+
+  g->main_image_width_rate = dt_bauhaus_slider_from_params(self, "main_image_width_rate");
+  dt_bauhaus_slider_set_format(g->main_image_width_rate, "%");
+  gtk_widget_set_tooltip_text(g->main_image_width_rate, _("the picture width as a share of the canvas width; the canvas grows so the picture never exceeds it"));
+
+  g->mini_top_bottom_margin = dt_bauhaus_slider_from_params(self, "mini_top_bottom_margin");
+  dt_bauhaus_slider_set_format(g->mini_top_bottom_margin, "%");
+  gtk_widget_set_tooltip_text(g->mini_top_bottom_margin, _("a minimal margin above and below the picture"));
+
+  g->aspect_w = dt_bauhaus_slider_from_params(self, "aspect_w");
+  dt_bauhaus_slider_set_step(g->aspect_w, 1.0);
+  dt_bauhaus_slider_set_digits(g->aspect_w, 0);
+  gtk_widget_set_tooltip_text(g->aspect_w, _("canvas aspect width; 0 keeps the picture aspect"));
+
+  g->aspect_h = dt_bauhaus_slider_from_params(self, "aspect_h");
+  dt_bauhaus_slider_set_step(g->aspect_h, 1.0);
+  dt_bauhaus_slider_set_digits(g->aspect_h, 0);
+  gtk_widget_set_tooltip_text(g->aspect_h, _("canvas aspect height; 0 keeps the picture aspect"));
+
+  g->landscape_output = dt_bauhaus_toggle_from_params(self, "landscape_output");
+  gtk_widget_set_tooltip_text(g->landscape_output, _("swap the canvas to landscape orientation"));
+
+  g->corner_radius = dt_bauhaus_slider_from_params(self, "corner_radius");
+  dt_bauhaus_slider_set_format(g->corner_radius, "%");
+  gtk_widget_set_tooltip_text(g->corner_radius, _("rounds the picture corners by a share of its height"));
+
+  g->shadow = dt_bauhaus_slider_from_params(self, "shadow");
+  dt_bauhaus_slider_set_format(g->shadow, "%");
+  gtk_widget_set_tooltip_text(g->shadow, _("drop shadow width as a share of the picture height"));
+
+  g->text_show = dt_bauhaus_toggle_from_params(self, "text_show");
+  gtk_widget_set_tooltip_text(g->text_show, _("print the picture info below the picture"));
+  g_signal_connect_after(G_OBJECT(g->text_show), "value-changed",
+                         G_CALLBACK(_showhide_changed), self);
+
+  g->text_model = gtk_entry_new();
+  gtk_entry_set_placeholder_text(GTK_ENTRY(g->text_model), "{Make} {Model}");
+  gtk_widget_set_tooltip_text(g->text_model, _("the first info row; placeholders: {Make} {Model} {Lens} {FocalLength} {FocalLengthIn35mmFormat} {FNumber} {ExposureTime} {ISO} -- commit with Enter"));
+  g_signal_connect(G_OBJECT(g->text_model), "activate", G_CALLBACK(_text_entry_activate), self);
+  g_signal_connect(G_OBJECT(g->text_model), "focus-out-event",
+                   G_CALLBACK(_text_entry_focus_out), self);
+  dt_gui_box_add(self->widget, g->text_model);
+
+  g->text_params = gtk_entry_new();
+  gtk_entry_set_placeholder_text(GTK_ENTRY(g->text_params),
+                                 "{FocalLengthIn35mmFormat}mm f/{FNumber} {ExposureTime}s ISO{ISO}");
+  gtk_widget_set_tooltip_text(g->text_params, _("the second info row, same placeholders -- commit with Enter"));
+  g_signal_connect(G_OBJECT(g->text_params), "activate", G_CALLBACK(_text_entry_activate), self);
+  g_signal_connect(G_OBJECT(g->text_params), "focus-out-event",
+                   G_CALLBACK(_text_entry_focus_out), self);
+  dt_gui_box_add(self->widget, g->text_params);
+
+  g->text_size = dt_bauhaus_slider_from_params(self, "text_size");
+  dt_bauhaus_slider_set_format(g->text_size, "%");
+  gtk_widget_set_tooltip_text(g->text_size, _("the info text size as a share of the canvas width"));
+
+  g->film_band = dt_bauhaus_slider_from_params(self, "film_band");
+  dt_bauhaus_slider_set_format(g->film_band, "%");
+  gtk_widget_set_tooltip_text(g->film_band, _("the black band width above and below the picture"));
+
+  g->film_caption = gtk_entry_new();
+  gtk_entry_set_placeholder_text(GTK_ENTRY(g->film_caption), _("film edge marking"));
+  gtk_widget_set_tooltip_text(g->film_caption, _("the film edge marking text in the bottom band -- commit with Enter"));
+  g_signal_connect(G_OBJECT(g->film_caption), "activate", G_CALLBACK(_text_entry_activate), self);
+  g_signal_connect(G_OBJECT(g->film_caption), "focus-out-event",
+                   G_CALLBACK(_text_entry_focus_out), self);
+  dt_gui_box_add(self->widget, g->film_caption);
+
+  g->film_caption_size = dt_bauhaus_slider_from_params(self, "film_caption_size");
+  dt_bauhaus_slider_set_format(g->film_caption_size, "%");
+  gtk_widget_set_tooltip_text(g->film_caption_size, _("the edge marking size as a share of the band width"));
+
   g->basis = dt_bauhaus_combobox_from_params(self, "basis");
   gtk_widget_set_tooltip_text(g->basis,
                               _("which dimension to use for the size calculation"));
@@ -3003,91 +3088,6 @@ void gui_init(dt_iop_module_t *self)
                        g->frame_picker, &dt_action_def_color_picker);
   g->frame_color_box = dt_gui_hbox(dt_gui_expand(label), g->frame_colorpick, g->frame_picker);
   dt_gui_box_add(self->widget, g->frame_color_box);
-
-  // ── the frame modes ──
-  g->mode = dt_bauhaus_combobox_from_params(self, "mode");
-  gtk_widget_set_tooltip_text(g->mode, _("basic border, yiyin backdrop, or a film strip"));
-  g_signal_connect_after(G_OBJECT(g->mode), "value-changed", G_CALLBACK(_mode_changed), self);
-
-  g->blur_amount = dt_bauhaus_slider_from_params(self, "blur_amount");
-  dt_bauhaus_slider_set_format(g->blur_amount, "%");
-  gtk_widget_set_tooltip_text(g->blur_amount, _("how strongly the blurred backdrop is blurred"));
-
-  g->adaptive_backdrop = dt_bauhaus_toggle_from_params(self, "adaptive_backdrop");
-  gtk_widget_set_tooltip_text(g->adaptive_backdrop, _("dim a bright blurred backdrop so the picture stands out"));
-  g_signal_connect_after(G_OBJECT(g->adaptive_backdrop), "value-changed",
-                         G_CALLBACK(_showhide_changed), self);
-
-  g->main_image_width_rate = dt_bauhaus_slider_from_params(self, "main_image_width_rate");
-  dt_bauhaus_slider_set_format(g->main_image_width_rate, "%");
-  gtk_widget_set_tooltip_text(g->main_image_width_rate, _("the picture width as a share of the canvas width; the canvas grows so the picture never exceeds it"));
-
-  g->mini_top_bottom_margin = dt_bauhaus_slider_from_params(self, "mini_top_bottom_margin");
-  dt_bauhaus_slider_set_format(g->mini_top_bottom_margin, "%");
-  gtk_widget_set_tooltip_text(g->mini_top_bottom_margin, _("a minimal margin above and below the picture"));
-
-  g->aspect_w = dt_bauhaus_slider_from_params(self, "aspect_w");
-  dt_bauhaus_slider_set_step(g->aspect_w, 1.0);
-  dt_bauhaus_slider_set_digits(g->aspect_w, 0);
-  gtk_widget_set_tooltip_text(g->aspect_w, _("canvas aspect width; 0 keeps the picture aspect"));
-
-  g->aspect_h = dt_bauhaus_slider_from_params(self, "aspect_h");
-  dt_bauhaus_slider_set_step(g->aspect_h, 1.0);
-  dt_bauhaus_slider_set_digits(g->aspect_h, 0);
-  gtk_widget_set_tooltip_text(g->aspect_h, _("canvas aspect height; 0 keeps the picture aspect"));
-
-  g->landscape_output = dt_bauhaus_toggle_from_params(self, "landscape_output");
-  gtk_widget_set_tooltip_text(g->landscape_output, _("swap the canvas to landscape orientation"));
-
-  g->corner_radius = dt_bauhaus_slider_from_params(self, "corner_radius");
-  dt_bauhaus_slider_set_format(g->corner_radius, "%");
-  gtk_widget_set_tooltip_text(g->corner_radius, _("rounds the picture corners by a share of its height"));
-
-  g->shadow = dt_bauhaus_slider_from_params(self, "shadow");
-  dt_bauhaus_slider_set_format(g->shadow, "%");
-  gtk_widget_set_tooltip_text(g->shadow, _("drop shadow width as a share of the picture height"));
-
-  g->text_show = dt_bauhaus_toggle_from_params(self, "text_show");
-  gtk_widget_set_tooltip_text(g->text_show, _("print the picture info below the picture"));
-  g_signal_connect_after(G_OBJECT(g->text_show), "value-changed",
-                         G_CALLBACK(_showhide_changed), self);
-
-  g->text_model = gtk_entry_new();
-  gtk_entry_set_placeholder_text(GTK_ENTRY(g->text_model), "{Make} {Model}");
-  gtk_widget_set_tooltip_text(g->text_model, _("the first info row; placeholders: {Make} {Model} {Lens} {FocalLength} {FocalLengthIn35mmFormat} {FNumber} {ExposureTime} {ISO} -- commit with Enter"));
-  g_signal_connect(G_OBJECT(g->text_model), "activate", G_CALLBACK(_text_entry_activate), self);
-  g_signal_connect(G_OBJECT(g->text_model), "focus-out-event",
-                   G_CALLBACK(_text_entry_focus_out), self);
-  dt_gui_box_add(self->widget, g->text_model);
-
-  g->text_params = gtk_entry_new();
-  gtk_entry_set_placeholder_text(GTK_ENTRY(g->text_params),
-                                 "{FocalLengthIn35mmFormat}mm f/{FNumber} {ExposureTime}s ISO{ISO}");
-  gtk_widget_set_tooltip_text(g->text_params, _("the second info row, same placeholders -- commit with Enter"));
-  g_signal_connect(G_OBJECT(g->text_params), "activate", G_CALLBACK(_text_entry_activate), self);
-  g_signal_connect(G_OBJECT(g->text_params), "focus-out-event",
-                   G_CALLBACK(_text_entry_focus_out), self);
-  dt_gui_box_add(self->widget, g->text_params);
-
-  g->text_size = dt_bauhaus_slider_from_params(self, "text_size");
-  dt_bauhaus_slider_set_format(g->text_size, "%");
-  gtk_widget_set_tooltip_text(g->text_size, _("the info text size as a share of the canvas width"));
-
-  g->film_band = dt_bauhaus_slider_from_params(self, "film_band");
-  dt_bauhaus_slider_set_format(g->film_band, "%");
-  gtk_widget_set_tooltip_text(g->film_band, _("the black band width above and below the picture"));
-
-  g->film_caption = gtk_entry_new();
-  gtk_entry_set_placeholder_text(GTK_ENTRY(g->film_caption), _("film edge marking"));
-  gtk_widget_set_tooltip_text(g->film_caption, _("the film edge marking text in the bottom band -- commit with Enter"));
-  g_signal_connect(G_OBJECT(g->film_caption), "activate", G_CALLBACK(_text_entry_activate), self);
-  g_signal_connect(G_OBJECT(g->film_caption), "focus-out-event",
-                   G_CALLBACK(_text_entry_focus_out), self);
-  dt_gui_box_add(self->widget, g->film_caption);
-
-  g->film_caption_size = dt_bauhaus_slider_from_params(self, "film_caption_size");
-  dt_bauhaus_slider_set_format(g->film_caption_size, "%");
-  gtk_widget_set_tooltip_text(g->film_caption_size, _("the edge marking size as a share of the band width"));
 
   _mode_showhide(self);
 }

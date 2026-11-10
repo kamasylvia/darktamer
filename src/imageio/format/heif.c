@@ -788,13 +788,16 @@ void gui_init(dt_imageio_module_format_t *self)
   // the .heic spelling is an Apple-facing convention: the switch only
   // exists there, and every other platform writes the plain container name
 #ifdef __APPLE__
-  gui->use_heic_extension = gtk_check_button_new_with_label(_("export HEIC"));
+  // the label says what this actually does -- it renames the file, it does
+  // not pick a different codec, so "export HEIC" would read as a format
+  // switch next to a format combo that already says HEIF
+  gui->use_heic_extension = gtk_check_button_new_with_label(_("use .heic extension"));
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(gui->use_heic_extension),
     dt_conf_get_bool("plugins/imageio/format/heif/use_heic_extension"));
   gtk_widget_set_tooltip_text(gui->use_heic_extension,
     _("name the file .heic instead of .heif\n"
-      "heic is the HEVC-encoded flavour of the same container, and the "
-      "spelling Apple devices expect"));
+      "the bytes are identical either way: this module always encodes HEVC, "
+      "and .heic is the spelling Apple devices and most viewers expect"));
   g_signal_connect(G_OBJECT(gui->use_heic_extension), "toggled",
                    G_CALLBACK(use_heic_extension_changed), NULL);
 

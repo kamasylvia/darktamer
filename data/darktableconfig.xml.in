@@ -3240,7 +3240,7 @@
   <dtconfig>
     <name>plugins/imageio/format/heif/quality</name>
     <type min="0" max="100">int</type>
-    <default>50</default>
+    <default>75</default>
     <shortdescription/>
     <longdescription/>
   </dtconfig>

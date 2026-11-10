@@ -64,6 +64,7 @@ typedef struct dt_imageio_heif_gui_t
   GtkWidget *quality;
   GtkWidget *compression_type;
   GtkWidget *subsample;
+  GtkWidget *use_heic_extension;
 } dt_imageio_heif_gui_t;
 
 void init(dt_imageio_module_format_t *self)
@@ -581,6 +582,9 @@ int set_params(dt_imageio_module_format_t *self, const void *params, const int s
   dt_bauhaus_combobox_set(g->compression_type, d->compression_type);
   dt_bauhaus_slider_set(g->quality, d->quality);
   dt_bauhaus_combobox_set(g->subsample, d->subsample);
+  if(g->use_heic_extension)
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g->use_heic_extension),
+      dt_conf_get_bool("plugins/imageio/format/heif/use_heic_extension"));
   return 0;
 }
 
@@ -618,16 +622,15 @@ const char *mime(dt_imageio_module_data_t *data)
 
 const char *extension(dt_imageio_module_data_t *data)
 {
-  // "heif" indicates the content may have been encoded by any codec.
-  // "heic" indicates the content was encoded using the HEVC codec.
-  // If we are not going to use other codecs, we can choose "heic" for
-  // better compatibility with Apple devices.
-  // If we add the ability to select the AV1 codec in this module, it would
-  // actually mean the ability to export to AVIF format (which uses the same
-  // container but the AV1 codec), then we would need to choose the extension
-  // here depending on the codec selected by the user.
-  // For AV1, the extension should be "avif".
-  return "heic";
+  // "heif" names the container regardless of codec; "heic" names the
+  // HEVC-encoded flavour. Both describe the same bytes here, but heic is an
+  // Apple-facing spelling, so the switch only exists there.
+#ifdef __APPLE__
+  return dt_conf_get_bool("plugins/imageio/format/heif/use_heic_extension")
+    ? "heic" : "heif";
+#else
+  return "heif";
+#endif
 }
 
 const char *name()
@@ -692,6 +695,14 @@ static void compression_type_changed(GtkWidget *widget, gpointer user_data)
   gtk_widget_set_visible(gui->quality, compression_type != HEIF_LOSSLESS);
   gtk_widget_set_visible(gui->subsample, compression_type != HEIF_LOSSLESS);
 }
+
+#ifdef __APPLE__
+static void use_heic_extension_changed(GtkCheckButton *widget, gpointer user_data)
+{
+  dt_conf_set_bool("plugins/imageio/format/heif/use_heic_extension",
+                   gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget)));
+}
+#endif
 
 static void subsample_combobox_changed(GtkWidget *widget,
                                        gpointer user_data)
@@ -772,10 +783,33 @@ void gui_init(dt_imageio_module_format_t *self)
   gtk_widget_set_no_show_all(gui->quality, TRUE);
   gtk_widget_set_no_show_all(gui->subsample, TRUE);
 
+  // the extension choice, mirrored into the export file name this dialog
+  // shows; ticked by default so the export reads as .heic out of the box
+  // the .heic spelling is an Apple-facing convention: the switch only
+  // exists there, and every other platform writes the plain container name
+#ifdef __APPLE__
+  gui->use_heic_extension = gtk_check_button_new_with_label(_("export HEIC"));
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(gui->use_heic_extension),
+    dt_conf_get_bool("plugins/imageio/format/heif/use_heic_extension"));
+  gtk_widget_set_tooltip_text(gui->use_heic_extension,
+    _("name the file .heic instead of .heif\n"
+      "heic is the HEVC-encoded flavour of the same container, and the "
+      "spelling Apple devices expect"));
+  g_signal_connect(G_OBJECT(gui->use_heic_extension), "toggled",
+                   G_CALLBACK(use_heic_extension_changed), NULL);
+
+  self->widget = dt_gui_vbox(gui->use_heic_extension,
+                             gui->bit_depth,
+                             gui->compression_type,
+                             gui->quality,
+                             gui->subsample);
+#else
+  gui->use_heic_extension = NULL;
   self->widget = dt_gui_vbox(gui->bit_depth,
                              gui->compression_type,
                              gui->quality,
                              gui->subsample);
+#endif
 }
 
 void gui_cleanup(dt_imageio_module_format_t *self)
@@ -800,6 +834,9 @@ void gui_reset(dt_imageio_module_format_t *self)
   dt_bauhaus_combobox_set(gui->compression_type, compression_type);
   dt_bauhaus_combobox_set(gui->bit_depth, _bit_depth_to_pos(bit_depth));
   dt_bauhaus_combobox_set(gui->subsample, subsample);
+  if(gui->use_heic_extension)
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(gui->use_heic_extension),
+      dt_confgen_get_bool("plugins/imageio/format/heif/use_heic_extension", DT_DEFAULT));
 }
 
 // clang-format off

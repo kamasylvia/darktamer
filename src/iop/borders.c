@@ -1248,7 +1248,7 @@ static void _yiyin_composite_text_rows(float *const plane, const int plane_w, co
       float *dst = plane + ((size_t)y * plane_w + x0) * 4;
       for(int x = x0; x < x1; x++)
       {
-        const float a = src[x - row_left[r]] * text_opacity;
+        const float a = src[x - row_left[r]] * CLAMP(text_opacity, 0.0f, 1.0f);
         dst[0] += (text_color[0] - dst[0]) * a;
         dst[1] += (text_color[1] - dst[1]) * a;
         dst[2] += (text_color[2] - dst[2]) * a;
@@ -1682,7 +1682,7 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
     _yiyin_stack_text_rows(rows, n_rows, cw, ch, L.text_bottom, row_left, row_top);
     const float white[3] = { 1.0f, 1.0f, 1.0f };
     _yiyin_composite_text_rows(out, cw, ch, rows, n_rows, row_left, row_top, white,
-                               d->text_opacity);
+                               d->text_opacity / 100.0f);
   }
   for(int r = 0; r < 2; r++) _yiyin_free_text_row(&rows[r]);
 
@@ -2085,7 +2085,8 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
       {
         const float white[3] = { 1.0f, 1.0f, 1.0f };
         const cl_int e = _yiyin_cl_text_over(gd, devid, dev_out, dev_tex, tex_w, tex_h,
-                                             tex_x, tex_y, cw, ch, white, d->text_opacity);
+                                             tex_x, tex_y, cw, ch, white,
+                                             d->text_opacity / 100.0f);
         if(e != CL_SUCCESS) err = e;
         dt_opencl_release_mem_object(dev_tex);
       }

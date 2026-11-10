@@ -133,17 +133,17 @@ typedef struct dt_iop_borders_params_t
   dt_iop_basis_t basis;     /* side of the photo to use as basis for the size calculation
                                $DEFAULT: 0 $DESCRIPTION: "basis" */
   // ── v5: frame modes (basic / blur / film strip) ──
-  dt_iop_borders_mode_t mode;         // $DEFAULT: DT_IOP_BORDERS_MODE_BASIC $DESCRIPTION: "mode"
+  dt_iop_borders_mode_t mode;         // $DEFAULT: DT_IOP_BORDERS_MODE_BLUR $DESCRIPTION: "mode"
   // blur mode (yiyin backdrop; the fill comes from color above)
   dt_iop_borders_backdrop_t backdrop; // $DEFAULT: DT_IOP_BORDERS_BACKDROP_BLUR $DESCRIPTION: "backdrop"
   float blur_amount;                  /* blurred backdrop strength
-                               $MIN: 0.0 $MAX: 200.0 $DEFAULT: 100.0 $DESCRIPTION: "blur strength" */
+                               $MIN: 0.0 $MAX: 200.0 $DEFAULT: 10.0 $DESCRIPTION: "blur strength" */
   gboolean adaptive_backdrop; /* dim a bright blurred backdrop
                                $DEFAULT: TRUE $DESCRIPTION: "dim a bright backdrop" */
   float main_image_width_rate;        /* picture width as a share of the canvas width
                                $MIN: 20.0 $MAX: 100.0 $DEFAULT: 90.0 $DESCRIPTION: "picture width" */
   float mini_top_bottom_margin;       /* minimal margin above and below the picture
-                               $MIN: 0.0 $MAX: 50.0 $DEFAULT: 0.0 $DESCRIPTION: "min top/bottom margin" */
+                               $MIN: 0.0 $MAX: 50.0 $DEFAULT: 10.0 $DESCRIPTION: "min top/bottom margin" */
   int aspect_w;             /* canvas aspect width; 0 keeps the picture aspect
                                $MIN: 0 $MAX: 10000 $DEFAULT: 0 $DESCRIPTION: "aspect width" */
   int aspect_h;             /* canvas aspect height; 0 keeps the picture aspect
@@ -176,13 +176,13 @@ typedef struct dt_iop_borders_params_t
   char film_font[64];       /* film edge marking font, a PostScript name DEFAULT: "Sans Bold" */
   float film_caption_color[3]; /* film edge marking color $DEFAULT: 1.0 $DESCRIPTION: "film text color" */
   float text_size1;         /* info row 1 size as a share of the canvas width
-                               $MIN: 0.5 $MAX: 6.0 $DEFAULT: 3.0 $DESCRIPTION: "row 1 size" */
+                               $MIN: 0.5 $MAX: 6.0 $DEFAULT: 1.8 $DESCRIPTION: "row 1 size" */
   float text_size2;         /* info row 2 size as a share of the canvas width
-                               $MIN: 0.5 $MAX: 6.0 $DEFAULT: 2.2 $DESCRIPTION: "row 2 size" */
+                               $MIN: 0.5 $MAX: 6.0 $DEFAULT: 1.8 $DESCRIPTION: "row 2 size" */
   float text_size3;         /* info row 3 size as a share of the canvas width
                                $MIN: 0.5 $MAX: 6.0 $DEFAULT: 2.2 $DESCRIPTION: "row 3 size" */
   float text_opacity;       /* info text opacity
-                               $MIN: 0.0 $MAX: 100.0 $DEFAULT: 100.0 $DESCRIPTION: "info text opacity" */
+                               $MIN: 0.0 $MAX: 100.0 $DEFAULT: 90.0 $DESCRIPTION: "info text opacity" */
 } dt_iop_borders_params_t;
 
 typedef struct dt_iop_borders_gui_data_t
@@ -2725,9 +2725,12 @@ void init(dt_iop_module_t *self)
   g_strlcpy(d->film_caption, "KODAK PORTRA 400", sizeof(d->film_caption));
   g_strlcpy(d->film_font, "Sans Bold", sizeof(d->film_font));
   d->film_caption_color[0] = d->film_caption_color[1] = d->film_caption_color[2] = 1.0f;
-  d->text_size1 = 3.0f;
-  d->text_size2 = d->text_size3 = 2.2f;
-  d->text_opacity = 100.0f;
+  d->text_size1 = 1.8f;
+  d->text_size2 = 1.8f;
+  d->text_size3 = 2.2f;
+  d->text_opacity = 90.0f;
+  d->blur_amount = 10.0f;
+  d->mini_top_bottom_margin = 10.0f;
 }
 
 void init_presets(dt_iop_module_so_t *self)
@@ -2746,10 +2749,10 @@ void init_presets(dt_iop_module_so_t *self)
         .basis = DT_IOP_BORDERS_BASIS_AUTO,
         .mode = DT_IOP_BORDERS_MODE_BASIC,
         .backdrop = DT_IOP_BORDERS_BACKDROP_BLUR,
-        .blur_amount = 100.0f,
+        .blur_amount = 10.0f,
         .adaptive_backdrop = 1,
         .main_image_width_rate = 90.0f,
-        .mini_top_bottom_margin = 0.0f,
+        .mini_top_bottom_margin = 10.0f,
         .aspect_w = 0,
         .aspect_h = 0,
         .landscape_output = 0,
@@ -2766,10 +2769,10 @@ void init_presets(dt_iop_module_so_t *self)
         .text_rows = 3,
         .text_lens = "{Lens}",
         .text_font = "Sans Bold",
-        .text_size1 = 3.0f,
-        .text_size2 = 2.2f,
+        .text_size1 = 1.8f,
+        .text_size2 = 1.8f,
         .text_size3 = 2.2f,
-        .text_opacity = 100.0f,
+        .text_opacity = 90.0f,
         .film_font = "Sans Bold",
         .film_caption_color = { 1.0f, 1.0f, 1.0f } };
   g_strlcpy(p.aspect_text, "3:2", sizeof(p.aspect_text));

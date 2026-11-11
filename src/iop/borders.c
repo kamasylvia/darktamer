@@ -1265,6 +1265,7 @@ static void _yiyin_process_film(const float *const in, float *const out,
                                 const dt_iop_roi_t *const roi_out,
                                 const dt_iop_borders_data_t *d)
 {
+  // the band is a property of the whole picture; scale it into this plane
   _yiyin_film_geom_t G;
   _yiyin_film_geom(&G, roi_in->width, roi_in->height, d);
   const int cw = roi_out->width, ch = roi_out->height;
@@ -1548,18 +1549,22 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
     rows[r].w = rows[r].h = 0;
   }
   int rows_w[YIYIN_MAX_ROWS] = { 0, 0, 0 }, rows_h[YIYIN_MAX_ROWS] = { 0, 0, 0 };
+  // the plan must describe the WHOLE picture: it is what the canvas was
+  // sized for, and a viewport-sized plan would change the text size and the
+  // reserved slot on every zoom step
+  const int pic_w_full = piece->buf_in.width;
+  const int pic_h_full = piece->buf_in.height;
+  const float sc = roi_out->scale;
   _yiyin_rows_plan_t plan;
-  _yiyin_plan_rows(&plan, roi_in->width, roi_in->height, d, &piece->pipe->image);
+  _yiyin_plan_rows(&plan, pic_w_full, pic_h_full, d, &piece->pipe->image);
   const int n_rows = plan.n;
   if(n_rows)
   {
-    // the plan's sizes, never a recomputation: a row it shrank to fit the
-    // frame cap must be rendered at the size it was measured at
     for(int r = 0; r < n_rows; r++)
     {
-      _yiyin_render_text_row(plan.text[r], plan.font_px[r], d->text_font, &rows[r]);
-      rows_w[r] = rows[r].coverage ? rows[r].w : 0;
-      rows_h[r] = rows[r].coverage ? rows[r].h : 0;
+      _yiyin_render_text_row(plan.text[r], plan.font_px[r] * sc, d->text_font, &rows[r]);
+      rows_w[r] = rows[r].coverage ? (int)roundf(rows[r].w / sc) : 0;
+      rows_h[r] = rows[r].coverage ? (int)roundf(rows[r].h / sc) : 0;
     }
   }
   _yiyin_free_rows_plan(&plan);
@@ -1869,28 +1874,32 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
     rows[r].coverage = NULL;
     rows[r].w = rows[r].h = 0;
   }
+  // the plan and the layout describe the WHOLE picture (see the CPU leg)
+  const int pic_w_full = piece->buf_in.width;
+  const int pic_h_full = piece->buf_in.height;
+  const float sc = roi_out->scale;
   int rows_w[YIYIN_MAX_ROWS] = { 0, 0, 0 }, rows_h[YIYIN_MAX_ROWS] = { 0, 0, 0 };
   _yiyin_rows_plan_t plan;
-  _yiyin_plan_rows(&plan, roi_in->width, roi_in->height, d, &piece->pipe->image);
+  _yiyin_plan_rows(&plan, pic_w_full, pic_h_full, d, &piece->pipe->image);
   const int n_rows = plan.n;
   if(n_rows)
   {
     for(int r = 0; r < n_rows; r++)
     {
-      _yiyin_render_text_row(plan.text[r], plan.font_px[r], d->text_font, &rows[r]);
-      rows_w[r] = rows[r].coverage ? rows[r].w : 0;
-      rows_h[r] = rows[r].coverage ? rows[r].h : 0;
+      _yiyin_render_text_row(plan.text[r], plan.font_px[r] * sc, d->text_font, &rows[r]);
+      rows_w[r] = rows[r].coverage ? (int)roundf(rows[r].w / sc) : 0;
+      rows_h[r] = rows[r].coverage ? (int)roundf(rows[r].h / sc) : 0;
     }
   }
   _yiyin_free_rows_plan(&plan);
 
   _yiyin_layout_t L;
-  _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_w, rows_h, n_rows);
+  _yiyin_layout(&L, pic_w_full, pic_h_full, d, rows_w, rows_h, n_rows);
   const int cw = roi_out->width, ch = roi_out->height;
 
   // composite/SDF geometry, output-plane px
-  const int pic_x = L.main_left - roi_out->x;
-  const int pic_y = L.main_top - roi_out->y;
+  const int pic_x = (int)roundf(L.main_left * sc) - roi_out->x;
+  const int pic_y = (int)roundf(L.main_top * sc) - roi_out->y;
   const float sdf_cx = pic_x + roi_in->width * 0.5f;
   const float sdf_cy = pic_y + roi_in->height * 0.5f;
   const float sdf_hx = roi_in->width * 0.5f;
@@ -2351,41 +2360,33 @@ void modify_roi_out(dt_iop_module_t *self,
   *roi_out = *roi_in;
   dt_iop_borders_data_t *d = piece->data;
 
+  // NOTE: this callback runs ONLY from dt_dev_pixelpipe_get_dimensions(),
+  // where roi_in is the whole unscaled image (x=y=0, scale=1). It defines
+  // piece->buf_out, the canvas the rest of the pipeline works against, and
+  // must therefore describe the FULL canvas -- never a viewport. The
+  // viewport mapping lives in modify_roi_in.
   if(d->mode == DT_IOP_BORDERS_MODE_FILM)
   {
-    // picture 1:1 between two black bands. The band geometry is a property
-    // of the WHOLE picture, so derive it from the full input plane at this
-    // scale and then translate the requested viewport into canvas space --
-    // computing it from roi_in would make the "canvas" shrink with whatever
-    // window the viewport happens to ask for, pinning a zoomed view in place.
     if(d->film_band <= 0.0f) return;
     _yiyin_film_geom_t G;
-    _yiyin_film_geom(&G, piece->buf_in.width, piece->buf_in.height, d);
-    const int band = (int)roundf(G.band * roi_in->scale);
-    roi_out->x = roi_in->x;
-    roi_out->y = roi_in->y + band;
-    roi_out->width = MAX(roi_in->width, 1);
-    roi_out->height = MAX(roi_in->height, 1);
+    _yiyin_film_geom(&G, roi_in->width, roi_in->height, d);
+    roi_out->height = MIN(roi_in->height + 2 * G.band, roi_in->height * 8);
     return;
   }
 
   if(d->mode == DT_IOP_BORDERS_MODE_BLUR)
   {
     if(_yiyin_is_identity(d)) return;
-    // same rule as the film leg: the layout is a property of the whole
-    // picture, so lay it out on the full plane and offset the viewport
     int rows_w[YIYIN_MAX_ROWS] = { 0, 0, 0 }, rows_h[YIYIN_MAX_ROWS] = { 0, 0, 0 };
     _yiyin_rows_plan_t plan;
-    _yiyin_plan_rows(&plan, piece->buf_in.width, piece->buf_in.height, d, &piece->pipe->image);
+    _yiyin_plan_rows(&plan, roi_in->width, roi_in->height, d, &piece->pipe->image);
     for(int r = 0; r < plan.n; r++) { rows_w[r] = plan.w[r]; rows_h[r] = plan.h[r]; }
     const int n_rows = plan.n;
     _yiyin_free_rows_plan(&plan);
     _yiyin_layout_t L;
-    _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d, rows_w, rows_h, n_rows);
-    roi_out->x = roi_in->x + (int)roundf(L.main_left * roi_in->scale);
-    roi_out->y = roi_in->y + (int)roundf(L.main_top * roi_in->scale);
-    roi_out->width = MAX(roi_in->width, 1);
-    roi_out->height = MAX(roi_in->height, 1);
+    _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_w, rows_h, n_rows);
+    roi_out->width = MIN(MAX(L.canvas_w, roi_in->width), roi_in->width * 8);
+    roi_out->height = MIN(MAX(L.canvas_h, roi_in->height), roi_in->height * 8);
     return;
   }
 
@@ -2496,11 +2497,18 @@ void modify_roi_in(dt_iop_module_t *self,
 
   if(d->mode != DT_IOP_BORDERS_MODE_BASIC)
   {
-    // the picture sits at a known origin on the canvas, so the input window
-    // is the canvas viewport shifted back by that origin, clipped to the
-    // picture. Asking for the whole input plane here would discard the
-    // module's scale and leave the viewport with a full-resolution buffer
-    // it then has to squeeze, which is what locked the zoomed view.
+    // buf_out (the canvas) and buf_in (the picture) are fixed by
+    // modify_roi_out, so the picture's origin is a constant fraction of the
+    // canvas and the input window is simply the canvas viewport shifted back
+    // by it, clipped to the picture. Recomputing the layout here would make
+    // it depend on the viewport instead of the picture.
+    const int canvas_w = piece->buf_out.width;
+    const int canvas_h = piece->buf_out.height;
+    if(canvas_w <= 0 || canvas_h <= 0) return;
+
+    // the origin is whatever the layout put on the full canvas -- it is not
+    // simply centered (the bottom text slot shifts it up), so ask the same
+    // layout the render uses
     int origin_x = 0, origin_y = 0;
     if(d->mode == DT_IOP_BORDERS_MODE_FILM)
     {
@@ -2518,7 +2526,8 @@ void modify_roi_in(dt_iop_module_t *self,
       const int n_rows = plan.n;
       _yiyin_free_rows_plan(&plan);
       _yiyin_layout_t L;
-      _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d, rows_w, rows_h, n_rows);
+      _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d,
+                    rows_w, rows_h, n_rows);
       origin_x = (int)roundf(L.main_left * roi_out->scale);
       origin_y = (int)roundf(L.main_top * roi_out->scale);
     }

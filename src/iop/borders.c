@@ -1562,19 +1562,22 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   _yiyin_rows_plan_t plan;
   _yiyin_plan_rows(&plan, pic_w_full, pic_h_full, d, &piece->pipe->image);
   const int n_rows = plan.n;
+  // the layout takes the plan's own (unscaled) metrics; the bitmaps rasterise
+  // at the plane's scale
+  for(int r = 0; r < n_rows; r++)
+  {
+    rows_w[r] = plan.w[r];
+    rows_h[r] = plan.h[r];
+  }
   if(n_rows)
   {
     for(int r = 0; r < n_rows; r++)
-    {
       _yiyin_render_text_row(plan.text[r], plan.font_px[r] * sc, d->text_font, &rows[r]);
-      rows_w[r] = rows[r].coverage ? (int)roundf(rows[r].w / sc) : 0;
-      rows_h[r] = rows[r].coverage ? (int)roundf(rows[r].h / sc) : 0;
-    }
   }
   _yiyin_free_rows_plan(&plan);
 
   _yiyin_layout_t L;
-  _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_w, rows_h, n_rows);
+  _yiyin_layout(&L, pic_w_full, pic_h_full, d, rows_w, rows_h, n_rows);
   const int cw = roi_out->width, ch = roi_out->height;
   // the picture scaled into this plane (geometry uses this, sampling uses roi_in)
   const int pic_w_s = MAX(1, (int)roundf((float)piece->buf_in.width * sc));

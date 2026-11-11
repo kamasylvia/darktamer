@@ -101,6 +101,8 @@ yiyin_composite(read_only image2d_t main_tex,
                 const float4 overlay_color,
                 const float2 main_offset,
                 const float2 main_size,
+                const int main_win_x,
+                const int main_win_y,
                 const float2 sdf_center,
                 const float2 sdf_half,
                 const float radius,
@@ -152,7 +154,9 @@ yiyin_composite(read_only image2d_t main_tex,
   float2 su = p - main_offset;
   if(su.x >= 0.0f && su.y >= 0.0f && su.x < main_size.x && su.y < main_size.y)
   {
-    float4 m = read_imagef(main_tex, CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST, (int2)su);
+    // main_tex holds the window that starts at (main_win_x, main_win_y)
+    float4 m = read_imagef(main_tex, CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST,
+                           (int2)(su) - (int2)(main_win_x, main_win_y));
     float cover = yiyin_rect_coverage(p, sdf_center, sdf_half, radius);
     o.rgb = mix(o.rgb, m.rgb, cover);
   }

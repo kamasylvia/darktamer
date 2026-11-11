@@ -1612,8 +1612,13 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   // 4. composite: backdrop band + overlay + shadow + the picture clipped by
   //    the rounded-rect SDF (the picture lookup is exact 1:1)
   const float fill[4] = { d->color[0], d->color[1], d->color[2], 1.0f };
-  const float cx = L.main_left + roi_in->width * 0.5f;
-  const float cy = L.main_top + roi_in->height * 0.5f;
+  // roi_in may be the viewport's slice of the picture, so the picture's
+  // origin inside THIS output plane is the canvas origin minus the plane's
+  // own canvas offset
+  const int pic_x = L.main_left - roi_out->x;
+  const int pic_y = L.main_top - roi_out->y;
+  const float cx = pic_x + roi_in->width * 0.5f;
+  const float cy = pic_y + roi_in->height * 0.5f;
   const float hx = roi_in->width * 0.5f, hy = roi_in->height * 0.5f;
   const float radius = (float)L.radius;
 
@@ -1661,7 +1666,7 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
       }
 
       // the picture, 1:1, rounded-rect clipped
-      const int su = i - L.main_left, sv = j - L.main_top;
+      const int su = i - pic_x, sv = j - pic_y;
       if(su >= 0 && sv >= 0 && su < roi_in->width && sv < roi_in->height)
       {
         const float *m = in + ((size_t)sv * roi_in->width + su) * 4;
@@ -1884,13 +1889,15 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   const int cw = roi_out->width, ch = roi_out->height;
 
   // composite/SDF geometry, output-plane px
-  const float sdf_cx = L.main_left + roi_in->width * 0.5f;
-  const float sdf_cy = L.main_top + roi_in->height * 0.5f;
+  const int pic_x = L.main_left - roi_out->x;
+  const int pic_y = L.main_top - roi_out->y;
+  const float sdf_cx = pic_x + roi_in->width * 0.5f;
+  const float sdf_cy = pic_y + roi_in->height * 0.5f;
   const float sdf_hx = roi_in->width * 0.5f;
   const float sdf_hy = roi_in->height * 0.5f;
   const float sdf_radius = (float)L.radius;
-  const float main_offset_x = (float)L.main_left;
-  const float main_offset_y = (float)L.main_top;
+  const float main_offset_x = (float)pic_x;
+  const float main_offset_y = (float)pic_y;
   const float main_size_w = (float)roi_in->width;
   const float main_size_h = (float)roi_in->height;
 
@@ -2004,10 +2011,10 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   {
     const double sigma = L.shadow_blur * 0.5;
     const int margin = (int)ceil(3.0 * sigma + L.radius + 2.0);
-    sub_x = MAX(0, L.main_left - margin);
-    sub_y = MAX(0, L.main_top - margin);
-    sub_w = MIN(cw, L.main_left + roi_in->width + margin) - sub_x;
-    sub_h = MIN(ch, L.main_top + roi_in->height + margin) - sub_y;
+    sub_x = MAX(0, pic_x - margin);
+    sub_y = MAX(0, pic_y - margin);
+    sub_w = MIN(cw, pic_x + roi_in->width + margin) - sub_x;
+    sub_h = MIN(ch, pic_y + roi_in->height + margin) - sub_y;
 
     if(sub_w > 0 && sub_h > 0)
     {
@@ -2346,34 +2353,39 @@ void modify_roi_out(dt_iop_module_t *self,
 
   if(d->mode == DT_IOP_BORDERS_MODE_FILM)
   {
-    // picture 1:1 between two black bands
+    // picture 1:1 between two black bands. The band geometry is a property
+    // of the WHOLE picture, so derive it from the full input plane at this
+    // scale and then translate the requested viewport into canvas space --
+    // computing it from roi_in would make the "canvas" shrink with whatever
+    // window the viewport happens to ask for, pinning a zoomed view in place.
     if(d->film_band <= 0.0f) return;
     _yiyin_film_geom_t G;
-    _yiyin_film_geom(&G, roi_in->width, roi_in->height, d);
-    roi_out->x = 0;
-    roi_out->y = 0;
+    _yiyin_film_geom(&G, piece->buf_in.width, piece->buf_in.height, d);
+    const int band = (int)roundf(G.band * roi_in->scale);
+    roi_out->x = roi_in->x;
+    roi_out->y = roi_in->y + band;
     roi_out->width = MAX(roi_in->width, 1);
-    roi_out->height = MIN(roi_in->height + 2 * G.band, roi_in->height * 8);
+    roi_out->height = MAX(roi_in->height, 1);
     return;
   }
 
   if(d->mode == DT_IOP_BORDERS_MODE_BLUR)
   {
     if(_yiyin_is_identity(d)) return;
+    // same rule as the film leg: the layout is a property of the whole
+    // picture, so lay it out on the full plane and offset the viewport
     int rows_w[YIYIN_MAX_ROWS] = { 0, 0, 0 }, rows_h[YIYIN_MAX_ROWS] = { 0, 0, 0 };
     _yiyin_rows_plan_t plan;
-    _yiyin_plan_rows(&plan, roi_in->width, roi_in->height, d, &piece->pipe->image);
+    _yiyin_plan_rows(&plan, piece->buf_in.width, piece->buf_in.height, d, &piece->pipe->image);
     for(int r = 0; r < plan.n; r++) { rows_w[r] = plan.w[r]; rows_h[r] = plan.h[r]; }
     const int n_rows = plan.n;
     _yiyin_free_rows_plan(&plan);
     _yiyin_layout_t L;
-    _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_w, rows_h, n_rows);
-    roi_out->x = 0;
-    roi_out->y = 0;
-    roi_out->width = MAX(L.canvas_w, roi_in->width);
-    roi_out->height = MAX(L.canvas_h, roi_in->height);
-    roi_out->width = MIN(roi_out->width, roi_in->width * 8);
-    roi_out->height = MIN(roi_out->height, roi_in->height * 8);
+    _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d, rows_w, rows_h, n_rows);
+    roi_out->x = roi_in->x + (int)roundf(L.main_left * roi_in->scale);
+    roi_out->y = roi_in->y + (int)roundf(L.main_top * roi_in->scale);
+    roi_out->width = MAX(roi_in->width, 1);
+    roi_out->height = MAX(roi_in->height, 1);
     return;
   }
 
@@ -2484,14 +2496,46 @@ void modify_roi_in(dt_iop_module_t *self,
 
   if(d->mode != DT_IOP_BORDERS_MODE_BASIC)
   {
-    // the picture is composited 1:1 and feeds the blur proxy: the whole
-    // input plane is needed at the output's scale
+    // the picture sits at a known origin on the canvas, so the input window
+    // is the canvas viewport shifted back by that origin, clipped to the
+    // picture. Asking for the whole input plane here would discard the
+    // module's scale and leave the viewport with a full-resolution buffer
+    // it then has to squeeze, which is what locked the zoomed view.
+    int origin_x = 0, origin_y = 0;
+    if(d->mode == DT_IOP_BORDERS_MODE_FILM)
+    {
+      _yiyin_film_geom_t G;
+      _yiyin_film_geom(&G, piece->buf_in.width, piece->buf_in.height, d);
+      origin_y = (int)roundf(G.band * roi_out->scale);
+    }
+    else if(!_yiyin_is_identity(d))
+    {
+      int rows_w[YIYIN_MAX_ROWS] = { 0, 0, 0 }, rows_h[YIYIN_MAX_ROWS] = { 0, 0, 0 };
+      _yiyin_rows_plan_t plan;
+      _yiyin_plan_rows(&plan, piece->buf_in.width, piece->buf_in.height, d,
+                       &piece->pipe->image);
+      for(int r = 0; r < plan.n; r++) { rows_w[r] = plan.w[r]; rows_h[r] = plan.h[r]; }
+      const int n_rows = plan.n;
+      _yiyin_free_rows_plan(&plan);
+      _yiyin_layout_t L;
+      _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d, rows_w, rows_h, n_rows);
+      origin_x = (int)roundf(L.main_left * roi_out->scale);
+      origin_y = (int)roundf(L.main_top * roi_out->scale);
+    }
+
     const float p_inw = (float)piece->buf_in.width * roi_out->scale;
     const float p_inh = (float)piece->buf_in.height * roi_out->scale;
-    roi_in->x = 0;
-    roi_in->y = 0;
-    roi_in->width = MAX(1, (int)roundf(p_inw));
-    roi_in->height = MAX(1, (int)roundf(p_inh));
+
+    // clip the shifted window to the picture's extent
+    const int x0 = MAX(0, roi_out->x - origin_x);
+    const int y0 = MAX(0, roi_out->y - origin_y);
+    const int x1 = MIN((int)roundf(p_inw), roi_out->x - origin_x + roi_out->width);
+    const int y1 = MIN((int)roundf(p_inh), roi_out->y - origin_y + roi_out->height);
+
+    roi_in->x = x0;
+    roi_in->y = y0;
+    roi_in->width = MAX(1, x1 - x0);
+    roi_in->height = MAX(1, y1 - y0);
     return;
   }
 

@@ -1846,10 +1846,10 @@ static cl_int _yiyin_process_film_cl(dt_iop_borders_global_data_t *gd, const int
   cl_int err = dt_opencl_enqueue_kernel_2d_args
     (devid, gd->kernel_yiyin_film_composite, cw, ch,
      CLARG(dev_in), CLARG(dev_out),
-     CLARG(roi_in->width), CLARG(roi_in->height),
+     CLARGINT(roi_in->width), CLARGINT(roi_in->height),
      CLARG(cw), CLARG(ch),
-     CLARG(G.band), CLARG(G.hole_y0), CLARG(G.hole_y1),
-     CLARG(G.hole_w), CLARG(G.pitch), CLARG(G.first_hole),
+     CLARGINT(G.band), CLARGINT(G.hole_y0), CLARGINT(G.hole_y1),
+     CLARGINT(G.hole_w), CLARGINT(G.pitch), CLARGINT(G.first_hole),
      CLARG(black_r), CLARG(black_g), CLARG(black_b),
      CLARG(hole_r), CLARG(hole_g), CLARG(hole_b));
   if(err != CL_SUCCESS) return err;
@@ -2114,12 +2114,17 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
 
   // 4. composite
   const int has_blur = wants_blur && dev_proxy ? 1 : 0;
+  // CLARG takes the address of its argument, so every argument must outlive
+  // the call -- a ternary is an rvalue and dwells in a temporary
+  cl_mem blur_arg = dev_proxy ? dev_proxy : dev_in;
+  cl_mem shadow_arg = dev_shadow ? dev_shadow : dev_in;
+  const int has_shadow_arg = dev_shadow ? 1 : 0;
   err = dt_opencl_enqueue_kernel_2d_args
     (devid, gd->kernel_yiyin_composite, cw, ch,
-     CLARG(dev_in), CLARG(dev_proxy ? dev_proxy : dev_in), CLARG(dev_shadow ? dev_shadow : dev_in),
+     CLARG(dev_in), CLARG(blur_arg), CLARG(shadow_arg),
      CLARG(dev_out),
      CLARG(has_blur), CLARG(has_overlay),
-     CLARG(dev_shadow ? 1 : 0),
+     CLARG(has_shadow_arg),
      CLARG(d->color[0]), CLARG(d->color[1]), CLARG(d->color[2]),
      CLARG(overlay[0]), CLARG(overlay[1]), CLARG(overlay[2]), CLARG(overlay[3]),
      CLARG(main_offset_x), CLARG(main_offset_y),
@@ -2129,7 +2134,7 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
      CLARG(sdf_radius),
      CLARG(cw), CLARG(ch),
      CLARG(canvas_w_s), CLARG(canvas_h_s),
-     CLARG(roi_out->x), CLARG(roi_out->y),
+     CLARGINT(roi_out->x), CLARGINT(roi_out->y),
      CLARG(pw), CLARG(ph),
      CLARG(sub_x), CLARG(sub_y), CLARG(sub_w), CLARG(sub_h));
 

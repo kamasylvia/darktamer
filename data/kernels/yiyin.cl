@@ -45,8 +45,8 @@ kernel void
 yiyin_shadow_sdf(write_only image2d_t out,
                  const int width,
                  const int height,
-                 const float2 center,
-                 const float2 half_ext,
+                 const float center_x, const float center_y,
+                 const float half_ext_x, const float half_ext_y,
                  const float radius,
                  const int sub_x,
                  const int sub_y)
@@ -55,7 +55,8 @@ yiyin_shadow_sdf(write_only image2d_t out,
   const int y = get_global_id(1);
   if(x >= width || y >= height) return;
   float2 p = (float2)(sub_x + x, sub_y + y) + 0.5f;
-  float a = yiyin_rect_coverage(p, center, half_ext, radius);
+  float a = yiyin_rect_coverage(p, (float2)(center_x, center_y),
+                                (float2)(half_ext_x, half_ext_y), radius);
   // replicated across RGBA -- the Gaussian runs on float4 planes
   write_imagef(out, (int2)(x, y), (float4)(a, a, a, 1.0f));
 }

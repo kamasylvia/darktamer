@@ -1477,22 +1477,26 @@ static void _yiyin_sample_proxy(const float *const proxy, const int pw, const in
 // the shadow plane: the rounded-rect SDF alpha stamped on a sub-plane that
 // covers the picture rect plus the blur fringe, then Gaussian blurred
 // (sigma = 0.5 * shadowBlur -- the CSS canvas shadowBlur unit is ~2 sigma)
-static float *_yiyin_shadow_plane(const float *const in, const int iw, const int ih,
-                                  const dt_iop_roi_t *const roi_out,
-                                  const _yiyin_layout_t *L, const double sigma,
+// `pic_x`/`pic_y` are the picture's origin INSIDE THIS OUTPUT PLANE (canvas
+// origin scaled, minus the plane's canvas offset) and `radius` is already in
+// plane pixels -- passing raw canvas values here is what misaligned the
+// shadow once the viewport could move.
+static float *_yiyin_shadow_plane(const int pic_x, const int pic_y,
+                                  const int iw, const int ih,
+                                  const int plane_w, const int plane_h,
+                                  const float radius, const double sigma,
                                   int *sub_x, int *sub_y, int *sub_w, int *sub_h)
 {
-  const int margin = (int)ceil(3.0 * sigma + L->radius + 2.0);
-  *sub_x = MAX(0, L->main_left - margin);
-  *sub_y = MAX(0, L->main_top - margin);
-  *sub_w = MIN(roi_out->width, L->main_left + iw + margin) - *sub_x;
-  *sub_h = MIN(roi_out->height, L->main_top + ih + margin) - *sub_y;
+  const int margin = (int)ceil(3.0 * sigma + radius + 2.0);
+  *sub_x = MAX(0, pic_x - margin);
+  *sub_y = MAX(0, pic_y - margin);
+  *sub_w = MIN(plane_w, pic_x + iw + margin) - *sub_x;
+  *sub_h = MIN(plane_h, pic_y + ih + margin) - *sub_y;
   if(*sub_w <= 0 || *sub_h <= 0) return NULL;
 
-  const float cx = L->main_left + iw * 0.5f;
-  const float cy = L->main_top + ih * 0.5f;
+  const float cx = pic_x + iw * 0.5f;
+  const float cy = pic_y + ih * 0.5f;
   const float hx = iw * 0.5f, hy = ih * 0.5f;
-  const float radius = (float)L->radius;
 
   const size_t n = (size_t)(*sub_w) * (*sub_h);
   float *plane = dt_alloc_align_float(n);
@@ -1604,28 +1608,26 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   if(d->backdrop == DT_IOP_BORDERS_BACKDROP_BLUR && proxy)
     _yiyin_probe_overlay(proxy, pw, ph, d->adaptive_backdrop, overlay, &has_overlay);
 
-  // 3. the shadow plane
+  // geometry, output-plane px: canvas values scaled into this plane, then
+  // shifted by the plane's own canvas offset
+  const int pic_x = (int)roundf(L.main_left * sc) - roi_out->x;
+  const int pic_y = (int)roundf(L.main_top * sc) - roi_out->y;
+  const float cx = pic_x + roi_in->width * 0.5f;
+  const float cy = pic_y + roi_in->height * 0.5f;
+  const float hx = roi_in->width * 0.5f, hy = roi_in->height * 0.5f;
+  const float radius = (float)(L.radius * sc);
+
+  // 3. the shadow plane (plane-relative, radius already scaled)
+  const float fill[4] = { d->color[0], d->color[1], d->color[2], 1.0f };
   float *shadow = NULL;
   int sub_x = 0, sub_y = 0, sub_w = 0, sub_h = 0;
   if(L.shadow_blur > 0.0)
   {
-    const double sigma = L.shadow_blur * 0.5;
-    shadow = _yiyin_shadow_plane(in, roi_in->width, roi_in->height, roi_out, &L, sigma,
-                                 &sub_x, &sub_y, &sub_w, &sub_h);
+    const double sigma = L.shadow_blur * 0.5 * sc;
+    shadow = _yiyin_shadow_plane(pic_x, pic_y, roi_in->width, roi_in->height,
+                                 roi_out->width, roi_out->height,
+                                 radius, sigma, &sub_x, &sub_y, &sub_w, &sub_h);
   }
-
-  // 4. composite: backdrop band + overlay + shadow + the picture clipped by
-  //    the rounded-rect SDF (the picture lookup is exact 1:1)
-  const float fill[4] = { d->color[0], d->color[1], d->color[2], 1.0f };
-  // roi_in may be the viewport's slice of the picture, so the picture's
-  // origin inside THIS output plane is the canvas origin minus the plane's
-  // own canvas offset
-  const int pic_x = L.main_left - roi_out->x;
-  const int pic_y = L.main_top - roi_out->y;
-  const float cx = pic_x + roi_in->width * 0.5f;
-  const float cy = pic_y + roi_in->height * 0.5f;
-  const float hx = roi_in->width * 0.5f, hy = roi_in->height * 0.5f;
-  const float radius = (float)L.radius;
 
   DT_OMP_FOR()
   for(int j = 0; j < ch; j++)
@@ -1689,7 +1691,17 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   if(n_rows)
   {
     int row_left[YIYIN_MAX_ROWS], row_top[YIYIN_MAX_ROWS];
-    _yiyin_stack_text_rows(rows, n_rows, cw, ch, L.text_bottom, row_left, row_top);
+    // the rows stack against the CANVAS (scaled), not this viewport; shifting
+    // them by the plane's canvas offset is what keeps them in the frame
+    const int canvas_w_s = (int)roundf(L.canvas_w * sc);
+    const int canvas_h_s = (int)roundf(L.canvas_h * sc);
+    _yiyin_stack_text_rows(rows, n_rows, canvas_w_s, canvas_h_s,
+                           L.text_bottom * sc, row_left, row_top);
+    for(int r = 0; r < n_rows; r++)
+    {
+      row_left[r] -= roi_out->x;
+      row_top[r] -= roi_out->y;
+    }
     const float white[3] = { 1.0f, 1.0f, 1.0f };
     _yiyin_composite_text_rows(out, cw, ch, rows, n_rows, row_left, row_top, white,
                                d->text_opacity / 100.0f);
@@ -1882,19 +1894,23 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   _yiyin_rows_plan_t plan;
   _yiyin_plan_rows(&plan, pic_w_full, pic_h_full, d, &piece->pipe->image);
   const int n_rows = plan.n;
+  // the layout takes the plan's OWN (unscaled) metrics -- scaling the
+  // rendered bitmaps back down would compound rounding and drift the canvas
+  for(int r = 0; r < n_rows; r++)
+  {
+    rows_w[r] = plan.w[r];
+    rows_h[r] = plan.h[r];
+  }
+  _yiyin_layout_t L;
+  _yiyin_layout(&L, pic_w_full, pic_h_full, d, rows_w, rows_h, n_rows);
+
+  // the bitmaps are rasterised at the plane's scale
   if(n_rows)
   {
     for(int r = 0; r < n_rows; r++)
-    {
       _yiyin_render_text_row(plan.text[r], plan.font_px[r] * sc, d->text_font, &rows[r]);
-      rows_w[r] = rows[r].coverage ? (int)roundf(rows[r].w / sc) : 0;
-      rows_h[r] = rows[r].coverage ? (int)roundf(rows[r].h / sc) : 0;
-    }
   }
   _yiyin_free_rows_plan(&plan);
-
-  _yiyin_layout_t L;
-  _yiyin_layout(&L, pic_w_full, pic_h_full, d, rows_w, rows_h, n_rows);
   const int cw = roi_out->width, ch = roi_out->height;
 
   // composite/SDF geometry, output-plane px
@@ -1904,7 +1920,7 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   const float sdf_cy = pic_y + roi_in->height * 0.5f;
   const float sdf_hx = roi_in->width * 0.5f;
   const float sdf_hy = roi_in->height * 0.5f;
-  const float sdf_radius = (float)L.radius;
+  const float sdf_radius = (float)(L.radius * sc);
   const float main_offset_x = (float)pic_x;
   const float main_offset_y = (float)pic_y;
   const float main_size_w = (float)roi_in->width;
@@ -2018,8 +2034,8 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   int sub_x = 0, sub_y = 0, sub_w = 0, sub_h = 0;
   if(L.shadow_blur > 0.0)
   {
-    const double sigma = L.shadow_blur * 0.5;
-    const int margin = (int)ceil(3.0 * sigma + L.radius + 2.0);
+    const double sigma = L.shadow_blur * 0.5 * sc;
+    const int margin = (int)ceil(3.0 * sigma + sdf_radius + 2.0);
     sub_x = MAX(0, pic_x - margin);
     sub_y = MAX(0, pic_y - margin);
     sub_w = MIN(cw, pic_x + roi_in->width + margin) - sub_x;
@@ -2090,7 +2106,15 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   if(err == CL_SUCCESS && n_rows)
   {
     int row_left[YIYIN_MAX_ROWS], row_top[YIYIN_MAX_ROWS];
-    _yiyin_stack_text_rows(rows, 2, cw, ch, L.text_bottom, row_left, row_top);
+    const int canvas_w_s = (int)roundf(L.canvas_w * sc);
+    const int canvas_h_s = (int)roundf(L.canvas_h * sc);
+    _yiyin_stack_text_rows(rows, n_rows, canvas_w_s, canvas_h_s,
+                           L.text_bottom * sc, row_left, row_top);
+    for(int r = 0; r < n_rows; r++)
+    {
+      row_left[r] -= roi_out->x;
+      row_top[r] -= roi_out->y;
+    }
     float *tex = NULL;
     int tex_w = 0, tex_h = 0, tex_x = 0, tex_y = 0;
     _yiyin_pack_text_tex(rows, row_left, row_top, n_rows, &tex, &tex_w, &tex_h, &tex_x, &tex_y);

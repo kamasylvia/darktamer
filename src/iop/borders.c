@@ -1576,13 +1576,16 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   _yiyin_layout_t L;
   _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_w, rows_h, n_rows);
   const int cw = roi_out->width, ch = roi_out->height;
+  // the picture scaled into this plane (geometry uses this, sampling uses roi_in)
+  const int pic_w_s = MAX(1, (int)roundf((float)piece->buf_in.width * sc));
+  const int pic_h_s = MAX(1, (int)roundf((float)piece->buf_in.height * sc));
 
   // 1. the blur proxy (blur mode only)
   float *proxy = NULL;
   int pw = 0, ph = 0;
   if(d->backdrop == DT_IOP_BORDERS_BACKDROP_BLUR)
   {
-    _yiyin_proxy_dims(roi_in->width, roi_in->height, &pw, &ph);
+    _yiyin_proxy_dims(pic_w_s, pic_h_s, &pw, &ph);
     proxy = dt_alloc_align_float((size_t)pw * ph * 4);
     if(proxy)
     {
@@ -1614,7 +1617,9 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   const int pic_y = (int)roundf(L.main_top * sc) - roi_out->y;
   const float cx = pic_x + roi_in->width * 0.5f;
   const float cy = pic_y + roi_in->height * 0.5f;
-  const float hx = roi_in->width * 0.5f, hy = roi_in->height * 0.5f;
+  // the picture is the WHOLE image scaled into this plane; roi_in may be a
+  // window of it, so geometry and sampling use different sizes
+  const float hx = pic_w_s * 0.5f, hy = pic_h_s * 0.5f;
   const float radius = (float)(L.radius * sc);
 
   // the canvas in this plane's pixels: what the backdrop and the text rows
@@ -1682,11 +1687,15 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
         }
       }
 
-      // the picture, 1:1, rounded-rect clipped
+      // the picture, 1:1, rounded-rect clipped. (i,j) is a plane pixel; the
+      // picture's own pixel is that minus the picture origin in the plane,
+      // and roi_in->x/y says where that picture window starts
       const int su = i - pic_x, sv = j - pic_y;
-      if(su >= 0 && sv >= 0 && su < roi_in->width && sv < roi_in->height)
+      if(su >= 0 && sv >= 0 && su < pic_w_s && sv < pic_h_s)
       {
-        const float *m = in + ((size_t)sv * roi_in->width + su) * 4;
+        const int bx = su - roi_in->x, by = sv - roi_in->y;
+        if(bx < 0 || by < 0 || bx >= roi_in->width || by >= roi_in->height) { o[3] = 1.0f; o += 4; continue; }
+        const float *m = in + ((size_t)by * roi_in->width + bx) * 4;
         const float cover = _yiyin_rect_coverage(px, py, cx, cy, hx, hy, radius);
         o[0] = o[0] + (m[0] - o[0]) * cover;
         o[1] = o[1] + (m[1] - o[1]) * cover;
@@ -1926,13 +1935,19 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   const int pic_y = (int)roundf(L.main_top * sc) - roi_out->y;
   const float sdf_cx = pic_x + roi_in->width * 0.5f;
   const float sdf_cy = pic_y + roi_in->height * 0.5f;
-  const float sdf_hx = roi_in->width * 0.5f;
-  const float sdf_hy = roi_in->height * 0.5f;
+  const int pic_w_s = MAX(1, (int)roundf((float)piece->buf_in.width * sc));
+  const int pic_h_s = MAX(1, (int)roundf((float)piece->buf_in.height * sc));
+  const float sdf_hx = pic_w_s * 0.5f;
+  const float sdf_hy = pic_h_s * 0.5f;
   const float sdf_radius = (float)(L.radius * sc);
   const float main_offset_x = (float)pic_x;
   const float main_offset_y = (float)pic_y;
-  const float main_size_w = (float)roi_in->width;
-  const float main_size_h = (float)roi_in->height;
+  const float main_size_w = (float)pic_w_s;
+  const float main_size_h = (float)pic_h_s;
+  // the main texture is the roi_in WINDOW of the picture, so the kernel needs
+  // that window's origin inside the picture to index it
+  const int main_win_x = roi_in->x;
+  const int main_win_y = roi_in->y;
   const int canvas_w_s = (int)roundf(L.canvas_w * sc);
   const int canvas_h_s = (int)roundf(L.canvas_h * sc);
 
@@ -1944,7 +1959,7 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   const int wants_blur = d->backdrop == DT_IOP_BORDERS_BACKDROP_BLUR;
   if(wants_blur)
   {
-    _yiyin_proxy_dims(roi_in->width, roi_in->height, &pw, &ph);
+    _yiyin_proxy_dims(pic_w_s, pic_h_s, &pw, &ph);
     dev_proxy = dt_opencl_alloc_device(devid, pw, ph, 4 * sizeof(float));
     dev_proxy2 = dt_opencl_alloc_device(devid, pw, ph, 4 * sizeof(float));
     if(!dev_proxy || !dev_proxy2)
@@ -2106,6 +2121,7 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
      CLARG(overlay[0]), CLARG(overlay[1]), CLARG(overlay[2]), CLARG(overlay[3]),
      CLARG(main_offset_x), CLARG(main_offset_y),
      CLARG(main_size_w), CLARG(main_size_h),
+     CLARG(main_win_x), CLARG(main_win_y),
      CLARG(sdf_cx), CLARG(sdf_cy), CLARG(sdf_hx), CLARG(sdf_hy),
      CLARG(sdf_radius),
      CLARG(cw), CLARG(ch),
@@ -2531,18 +2547,9 @@ void modify_roi_in(dt_iop_module_t *self,
 
   if(d->mode != DT_IOP_BORDERS_MODE_BASIC)
   {
-    // buf_out (the canvas) and buf_in (the picture) are fixed by
-    // modify_roi_out, so the picture's origin is a constant fraction of the
-    // canvas and the input window is simply the canvas viewport shifted back
-    // by it, clipped to the picture. Recomputing the layout here would make
-    // it depend on the viewport instead of the picture.
-    const int canvas_w = piece->buf_out.width;
-    const int canvas_h = piece->buf_out.height;
-    if(canvas_w <= 0 || canvas_h <= 0) return;
-
-    // the origin is whatever the layout put on the full canvas -- it is not
-    // simply centered (the bottom text slot shifts it up), so ask the same
-    // layout the render uses
+    // Only the picture window under the viewport is needed: the render legs
+    // take their geometry from the whole picture (buf_in) and sample roi_in
+    // for pixels, so this is what keeps a zoomed view cheap and movable.
     int origin_x = 0, origin_y = 0;
     if(d->mode == DT_IOP_BORDERS_MODE_FILM)
     {
@@ -2569,7 +2576,6 @@ void modify_roi_in(dt_iop_module_t *self,
     const float p_inw = (float)piece->buf_in.width * roi_out->scale;
     const float p_inh = (float)piece->buf_in.height * roi_out->scale;
 
-    // clip the shifted window to the picture's extent
     const int x0 = MAX(0, roi_out->x - origin_x);
     const int y0 = MAX(0, roi_out->y - origin_y);
     const int x1 = MIN((int)roundf(p_inw), roi_out->x - origin_x + roi_out->width);

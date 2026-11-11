@@ -1617,6 +1617,11 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   const float hx = roi_in->width * 0.5f, hy = roi_in->height * 0.5f;
   const float radius = (float)(L.radius * sc);
 
+  // the canvas in this plane's pixels: what the backdrop and the text rows
+  // are laid out against
+  const int canvas_w_s = (int)roundf(L.canvas_w * sc);
+  const int canvas_h_s = (int)roundf(L.canvas_h * sc);
+
   // 3. the shadow plane (plane-relative, radius already scaled)
   const float fill[4] = { d->color[0], d->color[1], d->color[2], 1.0f };
   float *shadow = NULL;
@@ -1639,10 +1644,15 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
     {
       const float px = i + 0.5f;
 
-      // backdrop: solid fill or the blurred proxy stretched to the canvas
+      // backdrop: the blurred proxy is stretched across the whole CANVAS, so
+      // the sample coordinate is the canvas position of this plane pixel --
+      // normalising by the viewport would slide the backdrop under the frame
       if(proxy)
       {
-        _yiyin_sample_proxy(proxy, pw, ph, (px / cw), (py / ch), o);
+        const float canvas_x = (float)(i + roi_out->x);
+        const float canvas_y = (float)(j + roi_out->y);
+        _yiyin_sample_proxy(proxy, pw, ph,
+                            canvas_x / (float)canvas_w_s, canvas_y / (float)canvas_h_s, o);
       }
       else
       {
@@ -1693,8 +1703,6 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
     int row_left[YIYIN_MAX_ROWS], row_top[YIYIN_MAX_ROWS];
     // the rows stack against the CANVAS (scaled), not this viewport; shifting
     // them by the plane's canvas offset is what keeps them in the frame
-    const int canvas_w_s = (int)roundf(L.canvas_w * sc);
-    const int canvas_h_s = (int)roundf(L.canvas_h * sc);
     _yiyin_stack_text_rows(rows, n_rows, canvas_w_s, canvas_h_s,
                            L.text_bottom * sc, row_left, row_top);
     for(int r = 0; r < n_rows; r++)
@@ -1925,6 +1933,8 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   const float main_offset_y = (float)pic_y;
   const float main_size_w = (float)roi_in->width;
   const float main_size_h = (float)roi_in->height;
+  const int canvas_w_s = (int)roundf(L.canvas_w * sc);
+  const int canvas_h_s = (int)roundf(L.canvas_h * sc);
 
   // device temporaries, declared ahead of any goto that skips them
   cl_mem dev_proxy = NULL, dev_proxy2 = NULL, dev_shadow = NULL;
@@ -2099,6 +2109,8 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
      CLARG(sdf_cx), CLARG(sdf_cy), CLARG(sdf_hx), CLARG(sdf_hy),
      CLARG(sdf_radius),
      CLARG(cw), CLARG(ch),
+     CLARG(canvas_w_s), CLARG(canvas_h_s),
+     CLARG(roi_out->x), CLARG(roi_out->y),
      CLARG(pw), CLARG(ph),
      CLARG(sub_x), CLARG(sub_y), CLARG(sub_w), CLARG(sub_h));
 
@@ -2106,8 +2118,6 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   if(err == CL_SUCCESS && n_rows)
   {
     int row_left[YIYIN_MAX_ROWS], row_top[YIYIN_MAX_ROWS];
-    const int canvas_w_s = (int)roundf(L.canvas_w * sc);
-    const int canvas_h_s = (int)roundf(L.canvas_h * sc);
     _yiyin_stack_text_rows(rows, n_rows, canvas_w_s, canvas_h_s,
                            L.text_bottom * sc, row_left, row_top);
     for(int r = 0; r < n_rows; r++)

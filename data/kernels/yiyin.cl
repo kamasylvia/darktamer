@@ -106,6 +106,10 @@ yiyin_composite(read_only image2d_t main_tex,
                 const float radius,
                 const int output_w,
                 const int output_h,
+                const int canvas_w,
+                const int canvas_h,
+                const int plane_off_x,
+                const int plane_off_y,
                 const int blur_w,
                 const int blur_h,
                 const int sub_x, const int sub_y,
@@ -123,7 +127,10 @@ yiyin_composite(read_only image2d_t main_tex,
   float4 o = (float4)(fill_r, fill_g, fill_b, 1.0f);
   if(has_blur)
   {
-    o = read_imagef(blur_tex, yiyin_sampler, p / (float2)(output_w, output_h));
+    // the backdrop is stretched across the CANVAS: this plane pixel's canvas
+    // position is its position here plus the plane's canvas offset
+    float2 canvas_p = p + (float2)(plane_off_x, plane_off_y);
+    o = read_imagef(blur_tex, yiyin_sampler, canvas_p / (float2)(canvas_w, canvas_h));
   }
   if(has_overlay)
   {

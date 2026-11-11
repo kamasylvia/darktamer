@@ -98,13 +98,14 @@ yiyin_composite(read_only image2d_t main_tex,
                 const int has_overlay,
                 const int has_shadow,
                 const float fill_r, const float fill_g, const float fill_b,
-                const float4 overlay_color,
-                const float2 main_offset,
-                const float2 main_size,
+                const float overlay_r, const float overlay_g,
+                const float overlay_b, const float overlay_a,
+                const float main_offset_x, const float main_offset_y,
+                const float main_size_x, const float main_size_y,
                 const int main_win_x,
                 const int main_win_y,
-                const float2 sdf_center,
-                const float2 sdf_half,
+                const float sdf_cx, const float sdf_cy,
+                const float sdf_hx, const float sdf_hy,
                 const float radius,
                 const int output_w,
                 const int output_h,
@@ -136,7 +137,7 @@ yiyin_composite(read_only image2d_t main_tex,
   }
   if(has_overlay)
   {
-    o.rgb = mix(o.rgb, overlay_color.rgb, overlay_color.a);
+    o.rgb = mix(o.rgb, (float3)(overlay_r, overlay_g, overlay_b), overlay_a);
   }
 
   // 2. shadow: the pre-blurred SDF alpha darkens beneath the picture
@@ -151,13 +152,14 @@ yiyin_composite(read_only image2d_t main_tex,
   }
 
   // 3. the picture, 1:1, rounded-rect clipped (radius 0 = the square path)
-  float2 su = p - main_offset;
-  if(su.x >= 0.0f && su.y >= 0.0f && su.x < main_size.x && su.y < main_size.y)
+  float2 su = p - (float2)(main_offset_x, main_offset_y);
+  if(su.x >= 0.0f && su.y >= 0.0f && su.x < main_size_x && su.y < main_size_y)
   {
     // main_tex holds the window that starts at (main_win_x, main_win_y)
     float4 m = read_imagef(main_tex, CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST,
-                           (int2)(su) - (int2)(main_win_x, main_win_y));
-    float cover = yiyin_rect_coverage(p, sdf_center, sdf_half, radius);
+                           convert_int2(su) - (int2)(main_win_x, main_win_y));
+    float cover = yiyin_rect_coverage(p, (float2)(sdf_cx, sdf_cy),
+                                      (float2)(sdf_hx, sdf_hy), radius);
     o.rgb = mix(o.rgb, m.rgb, cover);
   }
 

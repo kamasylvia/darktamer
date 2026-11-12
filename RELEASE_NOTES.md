@@ -156,6 +156,12 @@ changes (where available).
 - In the borders (framing) module, disable frame line controls when
   the border settings would prevent the frame line from being visible.
 
+- The borders (framing) module's picture info rows are now set up once
+  in preferences (processing > framing module): row count, the text of
+  each row, the font, the three sizes and the opacity. In the module the
+  block collapses into a "picture info" section, and the font is picked
+  from the system font list instead of being typed as a description.
+
 - Added an interactive editing mode allowing users to correct a color
   by selecting it directly on the photo with the mouse wheel, just as
   was already possible with the "tone equalizer" module.
@@ -529,6 +535,16 @@ changes (where available).
   routed to LibRaw via the libraw_extensions setting came out red.
 
 ## Bug Fixes
+
+- Fixed the borders (framing) module drawing the blurred backdrop over
+  the right and bottom edge of the picture once the viewport was zoomed
+  past the fit scale, and its OpenCL drop shadow falling off in a single
+  pixel instead of being blurred.
+
+- Fixed the borders (framing) module ignoring the chosen font on macOS,
+  where every font description was answered with Helvetica, and the font
+  chooser previewing a Chinese sentence as missing-glyph boxes. The
+  watermark font chooser got the same preview fix.
 
 - Fixed faint seams on a 112 pixel grid in images demosaiced with
   LMMSE, where each tile read leftover data from the previous tile.

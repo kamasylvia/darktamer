@@ -508,6 +508,15 @@ static void init_tab_generated(GtkWidget *dialog, GtkWidget *stack)
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(widget), </xsl:text><xsl:value-of select="default"/><xsl:text> * factor);</xsl:text>
   </xsl:template>
 
+  <!-- a font preference is a Pango description picked from the system list;
+       its button only emits "font-set" for user picks, so a double-click
+       reset has to write the preference itself -->
+  <xsl:template match="dtconfig[type='font']" mode="reset">
+    <xsl:text>
+    dt_conf_set_string("</xsl:text><xsl:value-of select="name"/><xsl:text>", "</xsl:text><xsl:value-of select="default"/><xsl:text>");
+    gtk_font_chooser_set_font(GTK_FONT_CHOOSER(widget), "</xsl:text><xsl:value-of select="default"/><xsl:text>");</xsl:text>
+  </xsl:template>
+
   <xsl:template match="dtconfig[type='bool']" mode="reset">
     <xsl:text>
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(widget), </xsl:text><xsl:value-of select="translate(default, $lowercase, $uppercase)"/><xsl:text>);</xsl:text>
@@ -566,6 +575,13 @@ static void init_tab_generated(GtkWidget *dialog, GtkWidget *stack)
     dt_conf_set_float("</xsl:text><xsl:value-of select="name"/><xsl:text>", gtk_spin_button_get_value(GTK_SPIN_BUTTON(widget)) / factor);</xsl:text>
   </xsl:template>
 
+  <xsl:template match="dtconfig[type='font']" mode="change">
+  <xsl:text>
+    gchar *font = gtk_font_chooser_get_font(GTK_FONT_CHOOSER(widget));
+    dt_conf_set_string("</xsl:text><xsl:value-of select="name"/><xsl:text>", font ? font : "");
+    g_free(font);</xsl:text>
+  </xsl:template>
+
   <xsl:template match="dtconfig[type='bool']" mode="change">
   <xsl:text>
     dt_conf_set_bool("</xsl:text><xsl:value-of select="name"/><xsl:text>", gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget)));</xsl:text>
@@ -616,6 +632,23 @@ static void init_tab_generated(GtkWidget *dialog, GtkWidget *stack)
     g_signal_connect(G_OBJECT(dialog), "response", G_CALLBACK(preferences_response_callback_</xsl:text><xsl:value-of select="generate-id(.)"/><xsl:text>), widget);
     snprintf(tooltip, 1024, _("double click to reset to `%s'"), "</xsl:text><xsl:value-of select="default"/><xsl:text>");
     gtk_widget_set_tooltip_text(labelev,  tooltip);</xsl:text>
+  </xsl:template>
+
+  <xsl:template match="dtconfig[type='font']" mode="tab">
+    <xsl:text>
+    widget = gtk_font_button_new_with_font(dt_conf_get_string_const("</xsl:text><xsl:value-of select="name"/><xsl:text>"));
+    gtk_font_button_set_show_size(GTK_FONT_BUTTON(widget), FALSE);
+    gtk_font_button_set_use_font(GTK_FONT_BUTTON(widget), FALSE);
+    // the chooser would otherwise preview pango_language_get_sample_string(),
+    // a CJK sentence on a Chinese UI that renders as boxes in Latin fonts
+    gtk_font_chooser_set_preview_text(GTK_FONT_CHOOSER(widget), "AaBbCc 0123456789");
+    gtk_widget_set_halign(widget, GTK_ALIGN_START);
+    gtk_size_group_add_widget(widget_group, widget);
+    gtk_label_set_mnemonic_widget(GTK_LABEL(label), widget);
+    g_signal_connect(G_OBJECT(widget), "font-set", G_CALLBACK(preferences_changed_callback_</xsl:text><xsl:value-of select="generate-id(.)"/><xsl:text>), labdef);
+    g_signal_connect(G_OBJECT(dialog), "response", G_CALLBACK(preferences_response_callback_</xsl:text><xsl:value-of select="generate-id(.)"/><xsl:text>), widget);
+    snprintf(tooltip, 1024, _("double click to reset to `%s'"), "</xsl:text><xsl:value-of select="default"/><xsl:text>");
+    gtk_widget_set_tooltip_text(labelev, tooltip);</xsl:text>
   </xsl:template>
 
   <xsl:template match="dtconfig[type='dir']" mode="tab">

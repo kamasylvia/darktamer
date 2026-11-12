@@ -14,6 +14,7 @@
   </dttab>
   <dttab name="processing" title="processing">
     <section name="general" title="image processing"/>
+    <section name="framing" title="framing module"/>
     <section name="hdr_alignment" title="HDR alignment"/>
     <section name="cpugpu" title="CPU / memory"/>
     <section name="opencl" title="OpenCL GPU acceleration"/>
@@ -4617,5 +4618,72 @@
     <default></default>
     <shortdescription>order or exclude MIDI devices</shortdescription>
     <longdescription>comma-separated list of device name fragments that if matched load MIDI device at id given by location in list\nadd encoding and number of knobs like 'Loupedeck:127,BeatStep:63:16'\nprefix with '-' to ignore matching devices\njust '-' stops loading all further devices or on its own disables MIDI completely</longdescription>
+  </dtconfig>
+
+  <!-- framing module: defaults for the picture info rows. Read when a new
+       module instance is created or reset, so an edit already in a history
+       keeps the values it was made with. -->
+  <dtconfig prefs="processing" section="framing">
+    <name>plugins/darkroom/borders/text_rows</name>
+    <type>int</type>
+    <default>3</default>
+    <shortdescription>picture info row count</shortdescription>
+    <longdescription>how many of the three info rows the framing module prints below the picture when a new instance is created</longdescription>
+  </dtconfig>
+  <dtconfig prefs="processing" section="framing">
+    <name>plugins/darkroom/borders/text_model</name>
+    <type>string</type>
+    <default>{Make} {Model}</default>
+    <shortdescription>picture info row 1</shortdescription>
+    <longdescription>content of the first info row\nplaceholders: {Make} {Model} {Lens} {FocalLength} {FocalLengthIn35mmFormat} {FNumber} {ExposureTime} {ISO}</longdescription>
+  </dtconfig>
+  <dtconfig prefs="processing" section="framing">
+    <name>plugins/darkroom/borders/text_lens</name>
+    <type>string</type>
+    <default>{Lens}</default>
+    <shortdescription>picture info row 2</shortdescription>
+    <longdescription>content of the second info row, same placeholders</longdescription>
+  </dtconfig>
+  <dtconfig prefs="processing" section="framing">
+    <name>plugins/darkroom/borders/text_params</name>
+    <type>string</type>
+    <default>{FocalLengthIn35mmFormat}mm f/{FNumber} {ExposureTime}s ISO{ISO}</default>
+    <shortdescription>picture info row 3</shortdescription>
+    <longdescription>content of the third info row, same placeholders</longdescription>
+  </dtconfig>
+  <dtconfig prefs="processing" section="framing">
+    <name>plugins/darkroom/borders/text_font</name>
+    <type>font</type>
+    <default>Sans Bold</default>
+    <shortdescription>picture info font</shortdescription>
+    <longdescription>font for the info rows, a Pango font description such as 'Sans Bold' or 'PingFang SC Semibold'\nthe framing module also offers the system font list</longdescription>
+  </dtconfig>
+  <dtconfig prefs="processing" section="framing">
+    <name>plugins/darkroom/borders/text_size1</name>
+    <type>float</type>
+    <default>2.2</default>
+    <shortdescription>picture info row 1 size</shortdescription>
+    <longdescription>row 1 font size as a share of the canvas width, in percent</longdescription>
+  </dtconfig>
+  <dtconfig prefs="processing" section="framing">
+    <name>plugins/darkroom/borders/text_size2</name>
+    <type>float</type>
+    <default>2.2</default>
+    <shortdescription>picture info row 2 size</shortdescription>
+    <longdescription>row 2 font size as a share of the canvas width, in percent</longdescription>
+  </dtconfig>
+  <dtconfig prefs="processing" section="framing">
+    <name>plugins/darkroom/borders/text_size3</name>
+    <type>float</type>
+    <default>2.2</default>
+    <shortdescription>picture info row 3 size</shortdescription>
+    <longdescription>row 3 font size as a share of the canvas width, in percent</longdescription>
+  </dtconfig>
+  <dtconfig prefs="processing" section="framing">
+    <name>plugins/darkroom/borders/text_opacity</name>
+    <type>float</type>
+    <default>90</default>
+    <shortdescription>picture info opacity</shortdescription>
+    <longdescription>opacity of all three info rows, in percent</longdescription>
   </dtconfig>
 </dtconfiglist>

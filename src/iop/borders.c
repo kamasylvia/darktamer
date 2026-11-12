@@ -2817,7 +2817,10 @@ error:
 void init_global(dt_iop_module_so_t *self)
 {
   const int program = 2;  // basic.cl from programs.conf
-  const int program_f = 54; // yiyin.cl from programs.conf (blur/film legs)
+  // yiyin.cl sits at the far end of programs.conf: a fork-only kernel takes a
+  // slot above the upstream sequence so upstream additions at the tail cannot
+  // collide with it
+  const int program_f = 200; // yiyin.cl from programs.conf (blur/film legs)
 
   dt_iop_borders_global_data_t *gd = malloc(sizeof(dt_iop_borders_global_data_t));
   self->data = gd;

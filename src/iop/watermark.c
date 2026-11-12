@@ -1470,6 +1470,10 @@ void gui_init(dt_iop_module_t *self)
                               _("text font, tags:\n$(WATERMARK_FONT_FAMILY)\n"
                                 "$(WATERMARK_FONT_STYLE)\n$(WATERMARK_FONT_WEIGHT)"));
   gtk_font_button_set_show_size (GTK_FONT_BUTTON(g->fontsel), FALSE);
+  // the chooser previews pango_language_get_sample_string(), a CJK sentence on
+  // a Chinese UI that every Latin font renders as missing-glyph boxes. Preview
+  // a fixed latin sample instead, as the framing module does.
+  gtk_font_chooser_set_preview_text(GTK_FONT_CHOOSER(g->fontsel), "AaBbCc 0123456789");
 
   gtk_grid_attach(grid, label, 0, line++, 1, 1);
   gtk_grid_attach_next_to(grid, g->fontsel, label, GTK_POS_RIGHT, 2, 1);

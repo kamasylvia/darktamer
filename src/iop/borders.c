@@ -1618,10 +1618,10 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   // shifted by the plane's own canvas offset
   const int pic_x = (int)roundf(L.main_left * sc) - roi_out->x;
   const int pic_y = (int)roundf(L.main_top * sc) - roi_out->y;
-  const float cx = pic_x + roi_in->width * 0.5f;
-  const float cy = pic_y + roi_in->height * 0.5f;
   // the picture is the WHOLE image scaled into this plane; roi_in may be a
   // window of it, so geometry and sampling use different sizes
+  const float cx = pic_x + pic_w_s * 0.5f;
+  const float cy = pic_y + pic_h_s * 0.5f;
   const float hx = pic_w_s * 0.5f, hy = pic_h_s * 0.5f;
   const float radius = (float)(L.radius * sc);
 
@@ -1637,7 +1637,7 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   if(L.shadow_blur > 0.0)
   {
     const double sigma = L.shadow_blur * 0.5 * sc;
-    shadow = _yiyin_shadow_plane(pic_x, pic_y, roi_in->width, roi_in->height,
+    shadow = _yiyin_shadow_plane(pic_x, pic_y, pic_w_s, pic_h_s,
                                  roi_out->width, roi_out->height,
                                  radius, sigma, &sub_x, &sub_y, &sub_w, &sub_h);
   }
@@ -1936,10 +1936,10 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   // composite/SDF geometry, output-plane px
   const int pic_x = (int)roundf(L.main_left * sc) - roi_out->x;
   const int pic_y = (int)roundf(L.main_top * sc) - roi_out->y;
-  const float sdf_cx = pic_x + roi_in->width * 0.5f;
-  const float sdf_cy = pic_y + roi_in->height * 0.5f;
   const int pic_w_s = MAX(1, (int)roundf((float)piece->buf_in.width * sc));
   const int pic_h_s = MAX(1, (int)roundf((float)piece->buf_in.height * sc));
+  const float sdf_cx = pic_x + pic_w_s * 0.5f;
+  const float sdf_cy = pic_y + pic_h_s * 0.5f;
   const float sdf_hx = pic_w_s * 0.5f;
   const float sdf_hy = pic_h_s * 0.5f;
   const float sdf_radius = (float)(L.radius * sc);
@@ -2066,8 +2066,8 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
     const int margin = (int)ceil(3.0 * sigma + sdf_radius + 2.0);
     sub_x = MAX(0, pic_x - margin);
     sub_y = MAX(0, pic_y - margin);
-    sub_w = MIN(cw, pic_x + roi_in->width + margin) - sub_x;
-    sub_h = MIN(ch, pic_y + roi_in->height + margin) - sub_y;
+    sub_w = MIN(cw, pic_x + pic_w_s + margin) - sub_x;
+    sub_h = MIN(ch, pic_y + pic_h_s + margin) - sub_y;
 
     if(sub_w > 0 && sub_h > 0)
     {
@@ -2100,8 +2100,18 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
       {
         err = dt_gaussian_blur_cl(g, dev_shadow, dev_shadow2);
         dt_gaussian_free_cl(g);
+        if(err != CL_SUCCESS)
+        {
+          dt_opencl_release_mem_object(dev_shadow2);
+          goto finish;
+        }
+        // the blur lands in dev_shadow2: swap it into place (the proxy leg
+        // above does the same). Without this the composite reads the
+        // unblurred SDF stamp and the shadow falls off in one pixel.
+        cl_mem t = dev_shadow;
+        dev_shadow = dev_shadow2;
+        dev_shadow2 = t;
         dt_opencl_release_mem_object(dev_shadow2);
-        if(err != CL_SUCCESS) goto finish;
       }
       else
       {

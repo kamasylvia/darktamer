@@ -62,8 +62,8 @@ static void _test_zoomed_viewport_covers_picture(void **state)
   d.color[0] = 0.8f; d.color[1] = 0.1f; d.color[2] = 0.1f;
   piece.data = &d;
 
-  _yiyin_layout_t L;
-  _yiyin_layout(&L, piece.buf_in.width, piece.buf_in.height, &d, NULL, NULL, 0);
+  _framing_layout_t L;
+  _framing_layout(&L, piece.buf_in.width, piece.buf_in.height, &d, NULL, NULL, 0);
 
   // the viewport: the canvas's right half, so roi_in is the picture's right
   // window and any window-sized geometry shifts the clip left
@@ -87,7 +87,7 @@ static void _test_zoomed_viewport_covers_picture(void **state)
     in[k * 4 + 3] = 1.0f;
   }
 
-  _yiyin_render_blur(NULL, &piece, in, out, &roi_in, &roi_out, &d);
+  _framing_render_blur(NULL, &piece, in, out, &roi_in, &roi_out, &d);
 
   // every plane pixel inside the picture rect (away from the antialiased
   // rim) must be the picture color, not the solid backdrop

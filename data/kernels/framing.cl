@@ -16,7 +16,7 @@
     along with darktable.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// yiyin frame render legs: the composite (backdrop band + optional dim
+// framing module render legs: the composite (backdrop band + optional dim
 // overlay + shadow + the 1:1 picture clipped by the rounded-rect SDF), the
 // shadow SDF stamp and the box-average downsample (blur proxy + probe).
 // Coordinate conventions: everything is in THIS RUN's plane pixels -- the
@@ -24,10 +24,10 @@
 // EXACT 1:1 (yiyin never rescales the picture -- it grows the canvas
 // instead): output pixel p samples the input at p - mainOffset.
 
-constant sampler_t yiyin_sampler
+constant sampler_t framing_sampler
     = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;
 
-static float yiyin_sd_rounded_rect(float2 p, float2 center, float2 half_ext, float radius)
+static float framing_sd_rounded_rect(float2 p, float2 center, float2 half_ext, float radius)
 {
   float2 q = fabs(p - center) - half_ext + (float2)(radius);
   float2 o = fmax(q, (float2)(0.0f));
@@ -35,14 +35,14 @@ static float yiyin_sd_rounded_rect(float2 p, float2 center, float2 half_ext, flo
 }
 
 // inside coverage with a 1px antialias band
-static float yiyin_rect_coverage(float2 p, float2 center, float2 half_ext, float radius)
+static float framing_rect_coverage(float2 p, float2 center, float2 half_ext, float radius)
 {
-  float sd = yiyin_sd_rounded_rect(p, center, half_ext, radius);
+  float sd = framing_sd_rounded_rect(p, center, half_ext, radius);
   return 1.0f - smoothstep(-0.5f, 0.5f, sd);
 }
 
 kernel void
-yiyin_shadow_sdf(write_only image2d_t out,
+framing_shadow_sdf(write_only image2d_t out,
                  const int width,
                  const int height,
                  const float center_x, const float center_y,
@@ -55,7 +55,7 @@ yiyin_shadow_sdf(write_only image2d_t out,
   const int y = get_global_id(1);
   if(x >= width || y >= height) return;
   float2 p = (float2)(sub_x + x, sub_y + y) + 0.5f;
-  float a = yiyin_rect_coverage(p, (float2)(center_x, center_y),
+  float a = framing_rect_coverage(p, (float2)(center_x, center_y),
                                 (float2)(half_ext_x, half_ext_y), radius);
   // replicated across RGBA -- the Gaussian runs on float4 planes
   write_imagef(out, (int2)(x, y), (float4)(a, a, a, 1.0f));
@@ -64,7 +64,7 @@ yiyin_shadow_sdf(write_only image2d_t out,
 // box-average the source rect mapped to this output pixel (clamped -- the
 // source may be any size; the rect edges are float-derived)
 kernel void
-yiyin_downsample(read_only image2d_t in,
+framing_downsample(read_only image2d_t in,
                  write_only image2d_t out,
                  const int src_w,
                  const int src_h,
@@ -91,7 +91,7 @@ yiyin_downsample(read_only image2d_t in,
 }
 
 kernel void
-yiyin_composite(read_only image2d_t main_tex,
+framing_blur_composite(read_only image2d_t main_tex,
                 read_only image2d_t blur_tex,
                 read_only image2d_t shadow_tex,
                 write_only image2d_t out,
@@ -134,7 +134,7 @@ yiyin_composite(read_only image2d_t main_tex,
     // the backdrop is stretched across the CANVAS: this plane pixel's canvas
     // position is its position here plus the plane's canvas offset
     float2 canvas_p = p + (float2)(plane_off_x, plane_off_y);
-    o = read_imagef(blur_tex, yiyin_sampler, canvas_p / (float2)(canvas_w, canvas_h));
+    o = read_imagef(blur_tex, framing_sampler, canvas_p / (float2)(canvas_w, canvas_h));
   }
   if(has_overlay)
   {
@@ -159,7 +159,7 @@ yiyin_composite(read_only image2d_t main_tex,
     // main_tex holds the window that starts at (main_win_x, main_win_y)
     float4 m = read_imagef(main_tex, CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST,
                            convert_int2(su) - (int2)(main_win_x, main_win_y));
-    float cover = yiyin_rect_coverage(p, (float2)(sdf_cx, sdf_cy),
+    float cover = framing_rect_coverage(p, (float2)(sdf_cx, sdf_cy),
                                       (float2)(sdf_hx, sdf_hy), radius);
     o.rgb = mix(o.rgb, m.rgb, cover);
   }
@@ -171,7 +171,7 @@ yiyin_composite(read_only image2d_t main_tex,
 // the film strip: picture 1:1 between two black bands, a centered row of
 // light-box holes per band; the edge marking is composited separately
 kernel void
-yiyin_film_composite(read_only image2d_t main_tex,
+framing_film_composite(read_only image2d_t main_tex,
                      write_only image2d_t out,
                      const int main_w, const int main_h,
                      const int output_w, const int output_h,
@@ -207,7 +207,7 @@ yiyin_film_composite(read_only image2d_t main_tex,
 // mix the white-glyph coverage texture over the plane inside a bbox; the
 // caller copies the bbox aside and hands it back as `in`
 kernel void
-yiyin_text_over(read_only image2d_t in,
+framing_text_over(read_only image2d_t in,
                 write_only image2d_t out,
                 read_only image2d_t tex,
                 const int bbox_x, const int bbox_y,

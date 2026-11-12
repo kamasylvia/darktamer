@@ -2195,7 +2195,7 @@ const char *dt_iop_gui_blend_showmask_tooltip(void)
            "shows the image in gray, tinted yellow where this module applies:\n"
            "the stronger the yellow, the stronger the effect. plain gray means\n"
            "the module does not apply there.\n"
-           "an empty mask shows no overlay at all: the module applies everywhere.\n"
+           "an empty mask shows no overlay, only a message: the module applies everywhere.\n"
            "switches the module and the mask on if they are off");
 }
 
@@ -2448,7 +2448,9 @@ static void _blendop_mask_enable(dt_iop_module_t *module)
   _mask_lock_sync(module);
 
   // no unfolding here: _blendop_masks_mode_callback above clears the fold
-  // preference and relocates the panel, which unfolds it in any position
+  // preference and relocates the panel, which applies it only on a focus
+  // change in the embedded and utility positions. A caller that wants the
+  // panel on screen asks for it (dt_iop_gui_blend_masks_panel_show)
 
   // the indicator just added starts unset
   _mask_display_buttons_sync(module);
@@ -2629,6 +2631,10 @@ static void _blendop_masks_add_shape(GtkGestureSingle *gesture,
 
   // we want to be sure that the iop has focus
   dt_iop_request_focus(self);
+  // a shortcut reaches the button with the panel folded away (or the mask
+  // just switched on in a folded one): show it before arming the shape, as
+  // folding it disarms the shape tools (dt_iop_gui_blend_masks_panel_collapsed)
+  if(dt_dev_gui_module() == self) dt_iop_gui_blend_masks_panel_show();
   dt_iop_color_picker_reset(self, FALSE);
   bd->masks_shown = DT_MASKS_EDIT_FULL;
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_edit), FALSE);
@@ -6545,8 +6551,8 @@ static void _tail_show(GtkWidget *w, const gboolean show, const gboolean buildin
   }
 }
 
-// repaint the run nodes, which an overlay draws and so does not follow the list
-// on its own: `w` is the list or anything in it
+// repaint the run nodes, which the list's container draws over the list and so
+// does not follow the list on its own: `w` is the list or anything in it
 static void _marks_redraw(GtkWidget *w)
 {
   for(; w; w = gtk_widget_get_parent(w))
@@ -10668,14 +10674,16 @@ static void _row_click_press(GtkGestureSingle *gesture,
 
 // dragging a row or a group of the list leaves the list as it is:
 // what is open stays open and what is folded stays folded, and nothing is
-// selected, so nothing the drag aims at moves when it starts. A folded group or
-// group the drag rests on for MASKS_SPRING_DELAY_MS opens (see _drop_motion),
+// selected, so nothing the drag aims at moves when it starts. A folded group, or
+// the "more" row of a folded run (see _pack_group_members), the drag rests on for MASKS_SPRING_DELAY_MS opens (see _drop_motion),
 // a delay so that a drag sweeping past folded groups does not open them all,
 // and it shows its members' headers alone: its opacity slider and the
 // editors (tagged "drag-hide" where they are built) stay hidden. What a drag
 // opened stays open while it lasts, so passing over it again moves nothing,
 // and folds again once it ends, but for where the member landed (see
-// _masks_drag_restore)
+// _masks_drag_restore). A run is the user's to open for good, so it is not
+// remembered (see _tail_remember) and the list rebuild the drop causes
+// folds it again unless it holds the member that landed
 #define MASKS_SPRING_DELAY_MS 600
 
 static struct
@@ -10684,9 +10692,9 @@ static struct
   gboolean dropped;      // and it landed, see _drop_received
   dt_mask_id_t formid;   // the member row it drags, or INVALID_MASKID
   gdouble start_x, start_y; // the pointer, in root coordinates, when it began
-  GtkWidget *candidate;  // the folded group it rests on (weak)
+  GtkWidget *candidate;  // the folded group or run's "more" row it rests on (weak)
   guint timer;           // opens the candidate once the rest is long enough
-  GPtrArray *opened;     // the groups it opened
+  GPtrArray *opened;     // the groups and "more" rows it opened
 } _masks_drag = { FALSE, FALSE, INVALID_MASKID, 0.0, 0.0, NULL, 0, NULL };
 
 static void _pointer_root_position(gdouble *x, gdouble *y)
@@ -12899,6 +12907,18 @@ static void _drag_spring_set_open(GtkWidget *w, const gboolean open)
   _set_chevron(g_object_get_data(G_OBJECT(w), "group-expand-toggle"), open, TRUE);
 }
 
+// the "more" row standing in for a folded run, which a drag resting on it opens
+static gboolean _drag_springs_more(GtkWidget *w)
+{
+  return g_object_get_data(G_OBJECT(w), "tail-more") != NULL;
+}
+
+// the run, as its "more" row is on show while it is folded
+static void _drag_spring_more_set_open(GtkWidget *more, const gboolean open)
+{
+  _tail_set_open(gtk_widget_get_parent(more), open, FALSE, _widget_id(more, "tail-key"));
+}
+
 static void _drag_hide_tagged(GtkWidget *w, gpointer data)
 {
   if(!gtk_widget_get_visible(w)) return;
@@ -12919,24 +12939,37 @@ static gboolean _masks_drag_spring(gpointer user_data)
 {
   _masks_drag.timer = 0;
   GtkWidget *w = _masks_drag.candidate;
-  if(!_masks_drag.active || !w || !_drag_spring_folded(w)) return G_SOURCE_REMOVE;
+  if(!_masks_drag.active || !w) return G_SOURCE_REMOVE;
+  if(_drag_springs_more(w))
+  {
+    if(!gtk_widget_get_visible(w)) return G_SOURCE_REMOVE;
+    _drag_spring_more_set_open(w, TRUE);
+    g_ptr_array_add(_masks_drag.opened, w);
+    return G_SOURCE_REMOVE;
+  }
+  if(!_drag_spring_folded(w)) return G_SOURCE_REMOVE;
   _foreach_tagged(w, "drag-hide", _drag_hide_tagged, NULL);
   _drag_spring_set_open(w, TRUE);
   g_ptr_array_add(_masks_drag.opened, w);
   return G_SOURCE_REMOVE;
 }
 
-// the folded group under drop target `t` the drag rests on: the innermost
-// group holding it, when that one is folded
-static void _masks_drag_rest_on(dt_iop_module_t *module, GtkWidget *list, GtkWidget *t)
+// what the drag rests on that it opens: the "more" row of a folded run under
+// the pointer, `more`, else the innermost group holding drop target `t`, when
+// that one is folded
+static void _masks_drag_rest_on(dt_iop_module_t *module, GtkWidget *list, GtkWidget *t,
+                                GtkWidget *more)
 {
   GtkWidget *spring = NULL;
-  for(GtkWidget *g = t; g && g != list; g = gtk_widget_get_parent(g))
-    if(_drag_springs(g))
-    {
-      if(_drag_spring_folded(g)) spring = g;
-      break;
-    }
+  if(more)
+    spring = more;
+  else
+    for(GtkWidget *g = t; g && g != list; g = gtk_widget_get_parent(g))
+      if(_drag_springs(g))
+      {
+        if(_drag_spring_folded(g)) spring = g;
+        break;
+      }
   if(spring == _masks_drag.candidate) return;
   _masks_drag_set_candidate(spring);
   if(spring) _masks_drag.timer = g_timeout_add(MASKS_SPRING_DELAY_MS, _masks_drag_spring, module);
@@ -12954,6 +12987,11 @@ static void _masks_drag_restore(dt_iop_module_t *module, GtkWidget *landed)
   for(guint i = 0; _masks_drag.opened && i < _masks_drag.opened->len; i++)
   {
     GtkWidget *w = g_ptr_array_index(_masks_drag.opened, i);
+    if(_drag_springs_more(w))
+    {
+      _drag_spring_more_set_open(w, FALSE);
+      continue;
+    }
     const gboolean keep = landed && (w == landed || gtk_widget_is_ancestor(landed, w));
     if(!keep) _drag_spring_set_open(w, FALSE);
   }
@@ -13028,6 +13066,30 @@ static GtkWidget *_drop_target_at(GtkWidget *w, const int x, const int y, int *t
   return found;
 }
 
+// the "more" row of a folded run under (x, y) in `w`, if there is one. Like
+// _drop_target_at, the one holding the point is the only one: siblings do not
+// overlap
+static GtkWidget *_drop_more_at(GtkWidget *w, const int x, const int y)
+{
+  if(_drag_springs_more(w)) return w;
+  if(!GTK_IS_CONTAINER(w)) return NULL;
+  GtkWidget *found = NULL;
+  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
+  for(GList *k = kids; k; k = g_list_next(k))
+  {
+    GtkWidget *c = k->data;
+    gint cx = 0, cy = 0;
+    if(!gtk_widget_get_mapped(c) || !gtk_widget_translate_coordinates(w, c, x, y, &cx, &cy)
+       || cx < 0 || cy < 0 || cx >= gtk_widget_get_allocated_width(c)
+       || cy >= gtk_widget_get_allocated_height(c))
+      continue;
+    found = _drop_more_at(c, cx, cy);
+    break;
+  }
+  g_list_free(kids);
+  return found;
+}
+
 // where a drop at (x, y) on the list lands; no frame when it lands nowhere.
 //
 // The band along the bottom edge of a group that is last in its list (see
@@ -13086,7 +13148,8 @@ static gboolean _drop_motion(
   if(_masks_drag.active)
   {
     int ty = 0;
-    _masks_drag_rest_on(user_data, w, d.frame ? _drop_target_at(w, x, y, &ty) : NULL);
+    _masks_drag_rest_on(user_data, w, d.frame ? _drop_target_at(w, x, y, &ty) : NULL,
+                        d.frame ? _drop_more_at(w, x, y) : NULL);
   }
   if(!d.frame)
     _drop_indicator_set(NULL, NULL, NULL);
@@ -17127,9 +17190,10 @@ static _walk_t _frames_step(GtkWidget *w, gpointer data)
 
 // a run's node is on the rail at the tick of the first of its folded elements,
 // or of the "more" row that stands in for them while it is folded: a minus
-// while the run is open, which folds it, a plus while it is folded, which opens it. Drawn on an overlay over the
-// list (see _marks_position), as the rail is the list's own left edge and the
-// list clips what it draws. `fn` is called with the centre of each, in `to`
+// while the run is open, which folds it, a plus while it is folded, which opens it. Drawn by the
+// list's container (see _marks_draw), as the rail is the list's own left edge and the
+// list clips what it draws. Not on an overlay: on Linux, GTK3 then never offers
+// a drag to the list's drop site. `fn` is called with the centre of each, in `to`
 // coordinates, until it returns TRUE; that returns the row
 static GtkWidget *_run_markers_each(GtkWidget *w, GtkWidget *to,
                                     gboolean (*fn)(GtkWidget *, int, int, gpointer),
@@ -17220,19 +17284,8 @@ static void _list_allocated(GtkWidget *list, GdkRectangle *alloc, gpointer user_
   _marks_redraw(list);
 }
 
-// the overlay the markers are drawn on: as wide as the list, and the room of a
-// node more to its left, which its rail would otherwise have half of
-static gboolean _marks_position(GtkOverlay *overlay, GtkWidget *marks, GdkRectangle *alloc,
-                                gpointer user_data)
-{
-  const int pad = (int)ceil(DT_MASKS_RUN_MARKER_RADIUS + DT_PIXEL_APPLY_DPI(2));
-  alloc->x = -pad;
-  alloc->y = 0;
-  alloc->width = gtk_widget_get_allocated_width(GTK_WIDGET(overlay)) + pad;
-  alloc->height = gtk_widget_get_allocated_height(GTK_WIDGET(overlay));
-  return TRUE;
-}
-
+// `marks` is the list's container, which has room to the left of the list for
+// half a node (#masks-list-area's padding), and draws this after its children
 static gboolean _marks_draw(GtkWidget *marks, cairo_t *cr, dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -17920,6 +17973,8 @@ static void _add_parametric_channel(dt_iop_module_t *self, const int channel_idx
   if(!(self->blend_params->mask_mode & (DEVELOP_MASK_MASK | DEVELOP_MASK_FLEXI)))
     _blendop_mask_enable(self);
   dt_iop_request_focus(self);
+  // as for the shape tools: a shortcut adds it with the panel folded away
+  if(dt_dev_gui_module() == self) dt_iop_gui_blend_masks_panel_show();
 
   dt_masks_form_t *form = dt_masks_create(DT_MASKS_PARAMETRIC);
   dt_masks_point_parametric_t *p = calloc(1, sizeof(dt_masks_point_parametric_t));
@@ -19080,30 +19135,24 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->masks_list_area = dt_gui_vbox(list_hover);
     gtk_widget_set_name(bd->masks_list_area, "masks-list-area");
     gtk_widget_set_no_show_all(bd->masks_list_area, TRUE);
-    // the run markers over it (see _marks_position)
-    GtkWidget *overlay = gtk_overlay_new();
-    gtk_container_add(GTK_CONTAINER(overlay), bd->masks_list_area);
-    // a windowless widget: a drawing area has a window of its own, which takes
-    // the pointer however its overlay is set to pass events through
-    GtkWidget *marks = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    g_object_set_data(G_OBJECT(bd->masks_list_box), "marks", marks);
+    // the run markers are drawn over the list by its container (see _marks_draw)
+    g_object_set_data(G_OBJECT(bd->masks_list_box), "marks", bd->masks_list_area);
     g_signal_connect(G_OBJECT(bd->masks_list_box), "size-allocate", G_CALLBACK(_list_allocated), NULL);
-    g_signal_connect(G_OBJECT(marks), "draw", G_CALLBACK(_marks_draw), module);
-    g_signal_connect(G_OBJECT(overlay), "get-child-position", G_CALLBACK(_marks_position), NULL);
-    gtk_overlay_add_overlay(GTK_OVERLAY(overlay), marks);
-    gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), marks, TRUE);
-    gtk_widget_show(marks);
-    gtk_widget_show(overlay);
-    // the markers' clicks and hover are seen from the overlay, in the capture
-    // phase, whichever of the list and the markers' own window the pointer is
-    // over: a press that is not on a marker is left to the rows
-    gtk_event_controller_set_propagation_phase(
-      GTK_EVENT_CONTROLLER(dt_gui_connect_click(overlay, _run_marker_pressed, NULL, module)),
-      GTK_PHASE_CAPTURE);
-    gtk_event_controller_set_propagation_phase(
-      dt_gui_connect_motion(overlay, _run_marker_motion, NULL, NULL, module), GTK_PHASE_CAPTURE);
-    bd->masks_box = GTK_BOX(dt_gui_vbox(overlay));
+    g_signal_connect_after(G_OBJECT(bd->masks_list_area), "draw", G_CALLBACK(_marks_draw), module);
+    bd->masks_box = GTK_BOX(dt_gui_vbox(bd->masks_list_area));
     _add_wrapped_box(blendw, bd->masks_box, "masks_drawn");
+    // the markers' clicks and hover are seen from the windowed box around the
+    // list, in the capture phase, whether the pointer is over the list or the
+    // room beside it: a press that is not on a marker is left to the rows
+    GtkWidget *wrap = gtk_widget_get_ancestor(GTK_WIDGET(bd->masks_box), GTK_TYPE_EVENT_BOX);
+    if(wrap)
+    {
+      gtk_event_controller_set_propagation_phase(
+        GTK_EVENT_CONTROLLER(dt_gui_connect_click(wrap, _run_marker_pressed, NULL, module)),
+        GTK_PHASE_CAPTURE);
+      gtk_event_controller_set_propagation_phase(
+        dt_gui_connect_motion(wrap, _run_marker_motion, NULL, NULL, module), GTK_PHASE_CAPTURE);
+    }
 
     bd->masks_inited = TRUE;
     _register_masks_action_shortcuts();

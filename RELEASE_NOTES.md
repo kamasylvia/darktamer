@@ -117,7 +117,17 @@ changes (where available).
   manager now drive the same controls in the panel. Existing masks are
   converted when an edit is opened and render as before.
 
+- DNG files carrying an OpcodeList3 GainMap, such as those written
+  by DJI drones, now have it applied during demosaicing. This
+  corrects the lens shading the camera recorded but left in the raw
+  data. Existing edits are left unchanged; new edits get it by
+  default.
+
 ## UI/UX Improvements
+
+- Added back and forward navigation in collections, with user-assignable
+  shortcuts. Navigation remembers collection rules and thumbnail scroll
+  positions for up to 32 visits during the current session.
 
 - The code has received a large set of changes in preparation of the
   Gtk4 migration.
@@ -237,6 +247,9 @@ changes (where available).
   controls and its camera presets, because the white balance is then
   controlled in color calibration.
 
+- The recent collections module now handles single or double click
+  according to the preference setting for collections.
+
 ## Performance Improvements
 
 - New edits convert the input color profile directly to the working RGB
@@ -297,7 +310,8 @@ changes (where available).
 
 - Drawn masks render faster, most of all masks with nested groups or
   shapes reused by several modules: each group no longer clears and
-  combines a full-size buffer just to copy in its first shape.
+  combines a full-size buffer just to copy in its first shape, and
+  folds each shape only over the part of the image it covers.
 
 - Lens correction with lensfun is faster on the OpenCL path: lensfun
   is now asked for its corrections on a coarse grid instead of for
@@ -534,6 +548,18 @@ changes (where available).
 - The LibRaw loader now supports X-Trans sensors. Previously, RAFs
   routed to LibRaw via the libraw_extensions setting came out red.
 
+- White balance set to "as shot" or "camera reference" now uses the
+  edited image's own multipliers when it is pasted from another image,
+  or applied through a style or preset, instead of the multipliers of
+  the image it was copied from. This also changes existing edits that
+  received such a white balance from another image, which mostly
+  removes a color cast. To give several images the same multipliers,
+  for example a series shot under one light, switch the white balance
+  of the image to copy from to "user modified" first. Series that got
+  one white balance by pasting "as shot" in an earlier version now use
+  each image's own as-shot multipliers, and need to be pasted again
+  that way.
+
 ## Bug Fixes
 
 - Fixed the borders (framing) module drawing the blurred backdrop over
@@ -545,6 +571,9 @@ changes (where available).
   where every font description was answered with Helvetica, and the font
   chooser previewing a Chinese sentence as missing-glyph boxes. The
   watermark font chooser got the same preview fix.
+
+- Fixed bands of slightly wrong colors in images demosaiced with AMaZE
+  whose height or width is 1 to 15 pixels more than a multiple of 128.
 
 - Fixed faint seams on a 112 pixel grid in images demosaiced with
   LMMSE, where each tile read leftover data from the previous tile.
@@ -798,6 +827,9 @@ changes (where available).
 - Copying a whole history stack no longer carries over the module order
   that was selected in an earlier "copy parts of the history" dialog.
 
+- Fixed lens correction with lensfun on the OpenCL path producing
+  different pixels from the CPU path along the image border.
+
 - Fixed the lens correction module reporting distortion correction as
   applied from embedded metadata when the file only carries chromatic
   aberration correction data.
@@ -809,6 +841,13 @@ changes (where available).
 
 - Fixed raw denoise using pixels of the wrong color near the top
   corners of some X-Trans images.
+
+- Fixed raw denoise on X-Trans images giving different results
+  depending on white balance's "prepare data for color calibration"
+  setting: with highlight reconstruction in inpaint opposed or
+  segmentation mode, clipped highlights were rebuilt with a white
+  balance correction meant for white-balanced data, although raw
+  denoise runs without white balance.
 
 - Fixed possible crashes after removing an image that had snapshots
   from the library, while either a snapshot was shown for comparison
@@ -932,6 +971,13 @@ changes (where available).
 - Fixed the wrong raster mask being applied when three or more external
   raster masks were used in one edit.
 
+- Fixed memory leaks of libgphoto2 event data, CameraFile objects, and
+  strdup'd filenames during tether polling and download.
+
+- Fixed tether mode treating non-fatal PTP errors as a lost camera
+  connection; only clear I/O / claim / missing-device failures now force
+  remount and leave tethering.
+
 - Fixed diffuse or sharpen giving a different result on the CPU than
   with OpenCL whenever an anisotropy was set: the CPU path computed the
   diffusion weights with a coarse approximation of the exponential.
@@ -947,6 +993,8 @@ changes (where available).
   denoise giving a different result with OpenCL than on the CPU: the
   OpenCL path gave the horizontal neighbors twice their weight. Edits
   using them may look slightly different when exported with OpenCL.
+
+- Fixed tethered bracket capture progress using the wrong image total.
 
 - The non-local means modes of denoise (profiled) and astrophoto
   denoise now treat the image edges the same way on the CPU and with
@@ -1005,6 +1053,27 @@ changes (where available).
 
 - Fixed scale pixels output shifted by a fraction of a pixel in each
   tile when the image was processed in tiles.
+
+- Fixed a crash when double-clicking while adding gradient masks
+  continuously (ctrl+click on the gradient shape button).
+
+- Fixed defining a key + right-click shortcut in shortcut mapping mode.
+  The mouse button release was taken as mapping mode's own right-click
+  instead of completing the shortcut, so the shortcut was only assigned
+  when the key was let go, as a long key press if the key had been held
+  longer than a double-click.
+
+- Fixed a crash when defining a key + mouse click shortcut in the
+  shortcuts dialog and letting go of the key quickly after the click.
+
+- Fixed color picker means drifting over large areas on the CPU. A hue
+  mean over an area of reds, whose hues sit on both sides of the hue
+  wrap-around, could be off by several percent.
+
+- Fixed Quick Access panel entries being duplicated each time the
+  module layout manager was reopened, for layouts with no module
+  groups other than the Quick Access panel. Entries already
+  duplicated by this bug are merged when the layout is loaded.
 
 ## Lua
 

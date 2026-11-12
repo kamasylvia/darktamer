@@ -190,9 +190,31 @@ static gboolean _camctl_ptp_error_is_transient(const char *text)
 {
   if(!text) return FALSE;
   /* 0x2019 and similar: camera temporarily busy (common during live view) */
-  if(strstr(text, "Device Busy")) return TRUE;
-  if(strstr(text, "0x2019")) return TRUE;
-  return FALSE;
+  gchar *h = g_ascii_strdown(text, -1);
+  const gboolean hit =
+      g_strstr_len(h, -1, "device busy")
+      || g_strstr_len(h, -1, "0x2019");
+  g_free(h);
+  return hit;
+}
+
+static gboolean _camctl_ptp_error_is_fatal(const char *text)
+{
+  if(!text) return FALSE;
+  /* Unplug / unusable connection - allowlist not "any PTP". */
+  gchar *h = g_ascii_strdown(text, -1);
+  const gboolean hit =
+      g_strstr_len(h, -1, "i/o error")
+      || g_strstr_len(h, -1, "io error")
+      || g_strstr_len(h, -1, "could not claim")
+      || g_strstr_len(h, -1, "no such device")
+      || g_strstr_len(h, -1, "device not found")
+      || g_strstr_len(h, -1, "usb claim")
+      || g_strstr_len(h, -1, "usb_claim")
+      || g_strstr_len(h, -1, "ptp no device")
+      || g_strstr_len(h, -1, "0x02f9");
+  g_free(h);
+  return hit;
 }
 
 static void _error_func_dispatch25(GPContext *context,
@@ -200,6 +222,10 @@ static void _error_func_dispatch25(GPContext *context,
                                    void *data)
 {
   dt_camctl_t *camctl = (dt_camctl_t *)data;
+
+  if(camctl->active_camera && camctl->active_camera->ptperror)
+    return;
+
   dt_print(DT_DEBUG_CAMCTL, "[camera_control] gphoto2 error: %s", text);
 
   if(!text || !strstr(text, "PTP"))
@@ -212,11 +238,21 @@ static void _error_func_dispatch25(GPContext *context,
     return;
   }
 
+  if(!_camctl_ptp_error_is_fatal(text))
+  {
+    dt_print(DT_DEBUG_CAMCTL,
+             "[camera_control] non-fatal PTP error: %s", text);
+    dt_control_log(_("camera error: %s"), text);
+    return;
+  }
+
   /* Fatal PTP: mark remount needed and tear the session down. */
   GList *ci = g_list_find(camctl->cameras, camctl->active_camera);
   if(ci)
   {
     dt_camera_t *cam = (dt_camera_t *)ci->data;
+    if(cam->ptperror)
+      return;
     dt_print(DT_DEBUG_CAMCTL,
              "[camera_control] PTP error `%s' for camera %s on port %s",
              text, cam->model, cam->port);
@@ -389,12 +425,13 @@ static void _camera_process_job(const dt_camctl_t *c,
           else
             dt_print(DT_DEBUG_CAMCTL,
                      "[camera_control] failed to download file %s", output);
-          close(handle);
+          gp_file_free(destination);
         }
         else
           dt_print(DT_DEBUG_CAMCTL,
                    "[camera_control] failed to download file %s", output);
         g_free(output);
+        g_free((char *)fname);
       }
       else
         dt_print(DT_DEBUG_CAMCTL,
@@ -1402,6 +1439,7 @@ void dt_camctl_import(const dt_camctl_t *c,
       }
 
       output = g_build_filename(output_path, fname, (char *)NULL);
+      g_free((char *)fname);
     }
 
     if(!g_file_set_contents(output, data, size, NULL))
@@ -2181,103 +2219,108 @@ static void _camera_poll_events(const dt_camctl_t *c,
                                 const dt_camera_t *cam)
 {
   CameraEventType event;
-  gpointer data;
-  if(gp_camera_wait_for_event(cam->gpcam, 30, &event, &data, c->gpcontext) == GP_OK)
+  void *data = NULL;
+
+  if(gp_camera_wait_for_event(cam->gpcam, 30, &event, &data, c->gpcontext) != GP_OK)
+    return;
+
+  if(event == GP_EVENT_UNKNOWN)
   {
-    if(event == GP_EVENT_UNKNOWN)
+    /* this is really some undefined behavior, seems like it's
+    camera driver dependent... very ugly! */
+    if(data
+      && (strstr((char *)data, "4006") // Nikon PTP driver
+          || (strstr((char *)data, "PTP Property")
+              && strstr((char *)data, "changed")))) // Some Canon driver maybe all ??
     {
-      /* this is really some undefined behavior, seems like it's
-      camera driver dependent... very ugly! */
-      if(strstr((char *)data, "4006") || // Nikon PTP driver
-         (strstr((char *)data, "PTP Property")
-          && strstr((char *)data, "changed")) // Some Canon driver maybe all ??
-         )
-      {
-        // Property change event occurred on camera
-        // let's update cache and signalling
+      // Property change event occurred on camera
+      // let's update cache and signalling
 
-        dt_print
-          (DT_DEBUG_CAMCTL,
-           "[camera_control] Camera configuration change event '%s', lets update internal "
-           "configuration cache", (char*)data);
-        // Update individual properties with gp_camera_get_single_config
-        if(strstr((char*)data, "PTP Property") && strstr((char*)data, "changed"))
+      dt_print
+        (DT_DEBUG_CAMCTL,
+          "[camera_control] Camera configuration change event '%s', lets update internal "
+          "configuration cache", (char*)data);
+      // Update individual properties with gp_camera_get_single_config
+      if(strstr((char*)data, "PTP Property") && strstr((char*)data, "changed"))
+      {
+        // Use the property name if provided (GUI elements use this
+        // name and won't update if the numeric code is used
+        // instead)
+        if(strstr((char*)data, "changed,"))
         {
-          // Use the property name if provided (GUI elements use this
-          // name and won't update if the numeric code is used
-          // instead)
-          if(strstr((char*)data, "changed,"))
+          char * nameStart = strchr(data + strlen("PTP Property "), '"');
+          if(nameStart != NULL)
           {
-            char * nameStart = strchr(data + strlen("PTP Property "), '"');
-            if(nameStart != NULL)
+            // Skip quotation marks
+            nameStart += 1;
+            const char *nameEnd = strchr(nameStart, '"');
+            if(nameEnd != NULL)
             {
-              // Skip quotation marks
-              nameStart += 1;
-              const char *nameEnd = strchr(nameStart, '"');
-              if(nameEnd != NULL)
+              char *name = g_try_malloc0(nameEnd - nameStart + 1);
+              if(name)
               {
-                char *name = g_try_malloc0(nameEnd - nameStart + 1);
-                if(name)
-                {
-                  strncpy(name, nameStart, nameEnd - nameStart);
-                  name[nameEnd - nameStart] = '\0';
-                  _camera_configuration_single_update(c, cam, name);
-                  g_free(name);
-                }
-                return;
+                strncpy(name, nameStart, nameEnd - nameStart);
+                name[nameEnd - nameStart] = '\0';
+                _camera_configuration_single_update(c, cam, name);
+                g_free(name);
               }
+              free(data);
+              return;
             }
-            dt_print(DT_DEBUG_CAMCTL, "[camera_control] Unable to parse event '%s', \
-                falling back to updating by code", (char*)data);
           }
-          char code[5];
-          strncpy(code, data + strlen("PTP Property "), 4);
-          code[4] = '\0';
-          _camera_configuration_single_update(c, cam, code);
+          dt_print(DT_DEBUG_CAMCTL, "[camera_control] Unable to parse event '%s', \
+              falling back to updating by code", (char*)data);
         }
-        else
-        {
-          _camera_configuration_update(c, cam);
-        }
+        char code[5];
+        strncpy(code, data + strlen("PTP Property "), 4);
+        code[4] = '\0';
+        _camera_configuration_single_update(c, cam, code);
       }
-    }
-    else if(event == GP_EVENT_FILE_ADDED)
-    {
-      if(cam->is_tethering)
+      else
       {
-        dt_print(DT_DEBUG_CAMCTL, "[camera_control] Camera file added event");
-        CameraFilePath *fp = (CameraFilePath *)data;
-        CameraFile *destination;
-        const char *output_path = _dispatch_request_image_path(c, NULL, cam);
-        if(!output_path) output_path = "/tmp";
-        const char *fname = _dispatch_request_image_filename(c, fp->name, NULL, cam);
-        if(!fname) fname = fp->name;
-
-        char *output = g_build_filename(output_path, fname, (char *)NULL);
-
-        int handle = g_open(output, O_CREAT | O_WRONLY | O_BINARY, 0666);
-        if(handle != -1)
-        {
-          gp_file_new_from_fd(&destination, handle);
-          if(gp_camera_file_get(cam->gpcam, fp->folder,
-                                fp->name, GP_FILE_TYPE_NORMAL, destination,
-                                c->gpcontext) == GP_OK)
-          {
-            // Notify listeners of captured image
-            _dispatch_camera_image_downloaded(c, cam, NULL, NULL, output);
-          }
-          else
-            dt_print(DT_DEBUG_CAMCTL,
-                     "[camera_control] failed to download file %s", output);
-          close(handle);
-        }
-        else
-          dt_print(DT_DEBUG_CAMCTL,
-                   "[camera_control] failed to download file %s", output);
-        g_free(output);
+        _camera_configuration_update(c, cam);
       }
     }
   }
+  else if(event == GP_EVENT_FILE_ADDED)
+  {
+    if(cam->is_tethering)
+    {
+      dt_print(DT_DEBUG_CAMCTL, "[camera_control] Camera file added event");
+      CameraFilePath *fp = (CameraFilePath *)data;
+      CameraFile *destination;
+      const char *output_path = _dispatch_request_image_path(c, NULL, cam);
+      if(!output_path) output_path = "/tmp";
+      const char *fname = _dispatch_request_image_filename(c, fp->name, NULL, cam);
+      const gboolean fname_allocated = (fname != NULL);
+      if(!fname) fname = fp->name;
+
+      char *output = g_build_filename(output_path, fname, (char *)NULL);
+
+      int handle = g_open(output, O_CREAT | O_WRONLY | O_BINARY, 0666);
+      if(handle != -1)
+      {
+        gp_file_new_from_fd(&destination, handle);
+        if(gp_camera_file_get(cam->gpcam, fp->folder,
+                              fp->name, GP_FILE_TYPE_NORMAL, destination,
+                              c->gpcontext) == GP_OK)
+        {
+          // Notify listeners of captured image
+          _dispatch_camera_image_downloaded(c, cam, NULL, NULL, output);
+        }
+        else
+          dt_print(DT_DEBUG_CAMCTL,
+                    "[camera_control] failed to download file %s", output);
+        gp_file_free(destination);
+      }
+      else
+        dt_print(DT_DEBUG_CAMCTL,
+                  "[camera_control] failed to download file %s", output);
+      g_free(output);
+      if(fname_allocated) g_free((char *)fname);
+    }
+  }
+  free(data);
 }
 
 

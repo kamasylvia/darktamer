@@ -272,7 +272,7 @@ void dt_iop_default_init(dt_iop_module_t *module)
         i->UShort.Default;
       break;
     case DT_INTROSPECTION_TYPE_INT8:
-      *(short*)((uint8_t *)module->default_params + i->header.offset) = i->Int8.Default;
+      *(int8_t*)((uint8_t *)module->default_params + i->header.offset) = i->Int8.Default;
       break;
     case DT_INTROSPECTION_TYPE_ENUM:
       *(int*)((uint8_t *)module->default_params + i->header.offset) = i->Enum.Default;
@@ -3632,6 +3632,11 @@ static gboolean _on_drag_motion(GtkWidget *widget,
   GtkWidget *src_header = gtk_drag_get_source_widget(dc);
   if(!src_header) return TRUE;
   GtkWidget *src_expander = gtk_widget_get_ancestor(src_header, DTGTK_TYPE_EXPANDER);
+  // only a drag of a module header moves modules: anything else dragged from
+  // inside a module, like a row of the masks list, also has its expander as
+  // ancestor, and would be taken for the module itself
+  if(!src_expander || src_header != dtgtk_expander_get_header_event_box(DTGTK_EXPANDER(src_expander)))
+    return TRUE;
 
   dt_iop_module_t *src = NULL;
   for(GList *iop = darktable.develop->iop; iop; iop = iop->next)
@@ -3820,6 +3825,7 @@ void dt_iop_gui_set_expander(dt_iop_module_t *module)
   gtk_widget_insert_action_group(module->multimenu_button,
                                  "instances",
                                  G_ACTION_GROUP(instance_action_group));
+  g_object_unref(instance_action_group);
 
   if(!(module->flags() & IOP_FLAGS_ONE_INSTANCE))
     gtk_widget_set_tooltip_text(module->presets_button,

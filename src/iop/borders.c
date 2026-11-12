@@ -62,9 +62,11 @@ typedef enum dt_iop_orientation_t
   DT_IOP_BORDERS_ASPECT_ORIENTATION_LANDSCAPE = 2, // $DESCRIPTION: "landscape"
 } dt_iop_orientation_t;
 
-// the frame mode: dt's plain border, the yiyin backdrop (blurred copy or
-// solid fill, rounded corners, drop shadow, picture info rows) or a film
-// strip. basic keeps the untouched legacy behaviour.
+// the frame mode: dt's plain border, the blur frame (blurred or solid
+// backdrop, rounded corners, drop shadow, picture info rows) or a film strip.
+// basic keeps the untouched legacy behaviour. The blur leg reproduces the
+// layout of the yiyin canvas script, so the comments below cite it by name
+// where a choice would otherwise look arbitrary.
 typedef enum dt_iop_borders_mode_t
 {
   DT_IOP_BORDERS_MODE_BASIC = 0, // $DESCRIPTION: "basic"
@@ -582,12 +584,12 @@ int legacy_params(dt_iop_module_t *self,
 typedef struct dt_iop_borders_global_data_t
 {
   int kernel_borders_fill;
-  // blur/film render legs (yiyin.cl, program 53)
-  int kernel_yiyin_composite;
-  int kernel_yiyin_shadow_sdf;
-  int kernel_yiyin_downsample;
-  int kernel_yiyin_film_composite;
-  int kernel_yiyin_text_over;
+  // blur/film render legs (framing.cl, program 53)
+  int kernel_framing_composite;
+  int kernel_framing_shadow_sdf;
+  int kernel_framing_downsample;
+  int kernel_framing_film_composite;
+  int kernel_framing_text_over;
 } dt_iop_borders_global_data_t;
 
 
@@ -595,16 +597,16 @@ typedef struct dt_iop_borders_params_t dt_iop_borders_data_t;
 
 // a rendered text-row bitmap: white glyph coverage in the alpha channel,
 // rgb unwritten (the composite mixes toward white by the coverage)
-typedef struct _yiyin_text_row_t
+typedef struct _framing_text_row_t
 {
   float *coverage; // w*h float coverage plane, NULL when the row is empty
   int w, h;        // bitmap dims
-} _yiyin_text_row_t;
+} _framing_text_row_t;
 
 // the joint layout, one computation per run. Pixel values are integers in
 // the canvas frame (top-left origin, y down); float64 intermediates folded
 // in exactly as yiyin does.
-typedef struct _yiyin_layout_t
+typedef struct _framing_layout_t
 {
   int canvas_w, canvas_h;  // backdrop canvas dims
   int main_left, main_top; // picture origin on the canvas
@@ -613,10 +615,10 @@ typedef struct _yiyin_layout_t
   double shadow_blur; // shadow width in canvas px (CSS shadowBlur unit, a
                       // Gaussian sigma is half of it)
   double text_bottom; // the bottom text slot in canvas px
-} _yiyin_layout_t;
+} _framing_layout_t;
 
 // the film strip geometry (fixed hole proportions, yiyin-free)
-typedef struct _yiyin_film_geom_t
+typedef struct _framing_film_geom_t
 {
   int band;            // band height in px
   int hole_h, hole_w;  // hole dims
@@ -625,11 +627,11 @@ typedef struct _yiyin_film_geom_t
   int hole_y0, hole_y1; // hole vertical range within each band
   double black[3];     // band fill, linear
   double hole[3];      // hole fill (light-box shine), linear
-} _yiyin_film_geom_t;
+} _framing_film_geom_t;
 
 // brightness tiers for the adaptive dim overlay (0-255 encoded scale);
 // below thresholds map to the gray level used as the overlay color
-static const float _yiyin_tiers[][2] =
+static const float _framing_tiers[][2] =
 {
   { 15.0f, 180.0f },
   { 20.0f, 158.0f },
@@ -639,19 +641,19 @@ static const float _yiyin_tiers[][2] =
 
 // sRGB EOTF (IEC 61966-2-1), the probe/tier mapping lives in the encoded
 // domain and comes back as a linear overlay color
-static inline float _yiyin_srgb_decode(const float c)
+static inline float _framing_srgb_decode(const float c)
 {
   return c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
 }
 
-static inline float _yiyin_srgb_encode(const float c)
+static inline float _framing_srgb_encode(const float c)
 {
   return c <= 0.0031308f ? 12.92f * c : 1.055f * powf(c, 1.0f / 2.4f) - 0.055f;
 }
 
 // signed distance to a rounded rectangle; the arcTo rounded rectangle is
 // this SDF's boundary
-static inline float _yiyin_sd_rounded_rect(const float px, const float py,
+static inline float _framing_sd_rounded_rect(const float px, const float py,
                                            const float cx, const float cy,
                                            const float hx, const float hy,
                                            const float radius)
@@ -665,12 +667,12 @@ static inline float _yiyin_sd_rounded_rect(const float px, const float py,
 }
 
 // inside coverage with a 1px antialias band
-static inline float _yiyin_rect_coverage(const float px, const float py,
+static inline float _framing_rect_coverage(const float px, const float py,
                                          const float cx, const float cy,
                                          const float hx, const float hy,
                                          const float radius)
 {
-  const float sd = _yiyin_sd_rounded_rect(px, py, cx, cy, hx, hy, radius);
+  const float sd = _framing_sd_rounded_rect(px, py, cx, cy, hx, hy, radius);
   const float t = CLAMP((sd + 0.5f), 0.0f, 1.0f);
   return 1.0f - t * t * (3.0f - 2.0f * t); // smoothstep(-0.5, 0.5, sd)
 }
@@ -679,7 +681,7 @@ static inline float _yiyin_rect_coverage(const float px, const float py,
 // radius/shadow -- the canvas coincides with the picture. The identity is
 // PARAM-based, never formula-based: the ceil-quirk makes e.g. a 7px-wide
 // canvas at rate 100 grow to 8px.
-static gboolean _yiyin_is_identity(const dt_iop_borders_data_t *d)
+static gboolean _framing_is_identity(const dt_iop_borders_data_t *d)
 {
   return d->main_image_width_rate >= 100.0f
     && d->mini_top_bottom_margin <= 0.0f
@@ -693,7 +695,7 @@ static gboolean _yiyin_is_identity(const dt_iop_borders_data_t *d)
 // steps 1-2 pass 1: the font-sizing canvas (yiyin clacBgImgSize() default
 // height -- row-height independent, which is why fonts can be sized before
 // the rows are known)
-static void _yiyin_pass1_canvas(const int img_w, const int img_h,
+static void _framing_pass1_canvas(const int img_w, const int img_h,
                                 const dt_iop_borders_data_t *d, int *pw, int *ph)
 {
   const double w = img_w, h = img_h;
@@ -730,7 +732,7 @@ static void _yiyin_pass1_canvas(const int img_w, const int img_h,
 // info rows are off. rows_w drives the canvas width: a text row wider than
 // the picture grows the frame rather than being clipped. The film strip
 // layout never goes through here.
-static void _yiyin_layout(_yiyin_layout_t *L,
+static void _framing_layout(_framing_layout_t *L,
                           const int img_w, const int img_h,
                           const dt_iop_borders_data_t *d,
                           const int *const rows_w, const int *const rows_h,
@@ -832,7 +834,7 @@ static void _yiyin_layout(_yiyin_layout_t *L,
 
 // the film strip geometry: picture 1:1 between two black bands with a
 // centered row of rectangular light-box holes and the edge marking text
-static void _yiyin_film_geom(_yiyin_film_geom_t *G, const int img_w, const int img_h,
+static void _framing_film_geom(_framing_film_geom_t *G, const int img_w, const int img_h,
                              const dt_iop_borders_data_t *d)
 {
   G->band = MAX(1, (int)round((double)img_h * (d->film_band / 100.0)));
@@ -847,7 +849,7 @@ static void _yiyin_film_geom(_yiyin_film_geom_t *G, const int img_w, const int i
   G->hole_y0 = (int)round(G->band * 0.30);
   G->hole_y1 = G->hole_y0 + G->hole_h;
   // near-black band (#141412) and the light-box shine through the holes
-  G->black[0] = G->black[1] = G->black[2] = _yiyin_srgb_decode(0.078f);
+  G->black[0] = G->black[1] = G->black[2] = _framing_srgb_decode(0.078f);
   G->hole[0] = G->hole[1] = G->hole[2] = 0.85;
 }
 
@@ -857,7 +859,7 @@ static void _yiyin_film_geom(_yiyin_film_geom_t *G, const int img_w, const int i
 // value for it (a manual lens reports focal 0 / f-number 0, a body may miss
 // tags). dt stores no explicit 35mm-equivalent focal, so that placeholder
 // derives it from the focal length times the crop factor.
-static gboolean _yiyin_exif_value(GString *out, const char *key, const dt_image_t *img)
+static gboolean _framing_exif_value(GString *out, const char *key, const dt_image_t *img)
 {
   if(!g_strcmp0(key, "Make"))
   {
@@ -920,7 +922,7 @@ static gboolean _yiyin_exif_value(GString *out, const char *key, const dt_image_
 // expand one yiyin template pattern against the picture's exif. A
 // space-separated token holding an unavailable placeholder is dropped whole,
 // so a manual-lens shot prints "1/1000s ISO200" rather than "mm f/0.0 ...".
-static char *_yiyin_expand_pattern(const char *pattern, const dt_image_t *img)
+static char *_framing_expand_pattern(const char *pattern, const dt_image_t *img)
 {
   GString *result = g_string_sized_new(128);
   const char *p = pattern;
@@ -948,7 +950,7 @@ static char *_yiyin_expand_pattern(const char *pattern, const dt_image_t *img)
       const size_t klen = MIN((size_t)(end - q - 1), sizeof(key) - 1);
       memcpy(key, q + 1, klen);
       key[klen] = '\0';
-      if(!_yiyin_exif_value(tok, key, img)) complete = FALSE;
+      if(!_framing_exif_value(tok, key, img)) complete = FALSE;
       q = end + 1;
     }
 
@@ -967,14 +969,14 @@ static char *_yiyin_expand_pattern(const char *pattern, const dt_image_t *img)
 // cairo/pixman refuse image surfaces past their dimension limits, and the
 // failure path hands back an error surface whose data pointer is NULL.
 // Nothing here may exceed it, however long the pattern text gets.
-#define YIYIN_TEXT_MAX_DIM 16000
+#define FRAMING_TEXT_MAX_DIM 16000
 
 // a generic family ("Sans", "Sans Bold", "Serif", "Monospace") is Pango's own
 // notation: the generic name plus optional style words. CoreText has no such
 // aliases and answers any name it cannot find with plain Helvetica, which
 // silently dropped the "Bold" in the default -- "Sans Bold" rendered as
 // regular Helvetica on macOS while Pango makes it bold everywhere else.
-static gboolean _yiyin_is_generic_family(const char *name)
+static gboolean _framing_is_generic_family(const char *name)
 {
   static const char *const generics[] =
     { "sans", "sans-serif", "sansserif", "serif", "monospace", "system-ui" };
@@ -999,10 +1001,10 @@ static gboolean _yiyin_is_generic_family(const char *name)
 // ...), and the family plus weight traits come back out as a Pango
 // description. Generic families and every non-Apple build are handed to Pango
 // verbatim, which is the only side that understands them.
-static void _yiyin_resolve_font(const char *name, char *out, const int out_len)
+static void _framing_resolve_font(const char *name, char *out, const int out_len)
 {
   snprintf(out, out_len, "%s", (name && *name) ? name : "Sans Bold");
-  if(_yiyin_is_generic_family(name)) return;
+  if(_framing_is_generic_family(name)) return;
 #ifdef __APPLE__
   // CoreText takes a family or a PostScript name, never a Pango description,
   // and answers anything it cannot find with plain Helvetica. The font chooser
@@ -1062,13 +1064,13 @@ static void _yiyin_resolve_font(const char *name, char *out, const int out_len)
 // the pango layout for one text row; metrics and render MUST share it, or the
 // measured row and the rendered bitmap drift apart by a pixel and the canvas
 // reserved for the text misses it
-static PangoLayout *_yiyin_text_layout_new(const char *text, const double size_px,
+static PangoLayout *_framing_text_layout_new(const char *text, const double size_px,
                                            const char *fontdesc,
                                            PangoContext **ctx_out,
                                            PangoFontDescription **fd_out)
 {
   char resolved[128];
-  _yiyin_resolve_font(fontdesc, resolved, sizeof(resolved));
+  _framing_resolve_font(fontdesc, resolved, sizeof(resolved));
   PangoFontMap *fontmap = pango_cairo_font_map_get_default();
   PangoContext *context = pango_font_map_create_context(fontmap);
   PangoLayout *layout = pango_layout_new(context);
@@ -1082,7 +1084,7 @@ static PangoLayout *_yiyin_text_layout_new(const char *text, const double size_p
   return layout;
 }
 
-static void _yiyin_text_layout_free(PangoLayout *layout, PangoContext *context,
+static void _framing_text_layout_free(PangoLayout *layout, PangoContext *context,
                                     PangoFontDescription *fd)
 {
   g_object_unref(layout);
@@ -1096,7 +1098,7 @@ static void _yiyin_text_layout_free(PangoLayout *layout, PangoContext *context,
 // limit: the planner has to see the overrun to scale the row back down. Only
 // a size the measurement cannot produce at all (no text, degenerate font)
 // reports zero.
-static void _yiyin_text_metrics(const char *text, const double size_px,
+static void _framing_text_metrics(const char *text, const double size_px,
                                 const char *fontdesc, int *w, int *h)
 {
   *w = *h = 0;
@@ -1104,10 +1106,10 @@ static void _yiyin_text_metrics(const char *text, const double size_px,
 
   PangoContext *context = NULL;
   PangoFontDescription *fd = NULL;
-  PangoLayout *layout = _yiyin_text_layout_new(text, size_px, fontdesc, &context, &fd);
+  PangoLayout *layout = _framing_text_layout_new(text, size_px, fontdesc, &context, &fd);
   int tw = 0, th = 0;
   pango_layout_get_pixel_size(layout, &tw, &th);
-  _yiyin_text_layout_free(layout, context, fd);
+  _framing_text_layout_free(layout, context, fd);
   if(tw < 1 || th < 1) return;
   *w = tw + 2;
   *h = th + 2;
@@ -1118,22 +1120,22 @@ static void _yiyin_text_metrics(const char *text, const double size_px,
 // encoded color is exactly 1.0 -- so the composite mix toward linear white by
 // the ALPHA alone is the correct encoded/linear algebra for white text, the
 // yiyin_watermark_row semantics with the color side collapsed.
-static void _yiyin_render_text_row(const char *text, const double size_px,
-                                   const char *fontdesc, _yiyin_text_row_t *row)
+static void _framing_render_text_row(const char *text, const double size_px,
+                                   const char *fontdesc, _framing_text_row_t *row)
 {
   row->coverage = NULL;
   row->w = row->h = 0;
-  if(!text || !*text || size_px < 2.0 || size_px > YIYIN_TEXT_MAX_DIM) return;
+  if(!text || !*text || size_px < 2.0 || size_px > FRAMING_TEXT_MAX_DIM) return;
 
   PangoContext *context = NULL;
   PangoFontDescription *fd = NULL;
-  PangoLayout *layout = _yiyin_text_layout_new(text, size_px, fontdesc, &context, &fd);
+  PangoLayout *layout = _framing_text_layout_new(text, size_px, fontdesc, &context, &fd);
 
   int tw = 0, th = 0;
   pango_layout_get_pixel_size(layout, &tw, &th);
-  if(tw < 1 || th < 1 || tw > YIYIN_TEXT_MAX_DIM || th > YIYIN_TEXT_MAX_DIM)
+  if(tw < 1 || th < 1 || tw > FRAMING_TEXT_MAX_DIM || th > FRAMING_TEXT_MAX_DIM)
   {
-    _yiyin_text_layout_free(layout, context, fd);
+    _framing_text_layout_free(layout, context, fd);
     return;
   }
   const int w = tw + 2, h = th + 2;
@@ -1142,7 +1144,7 @@ static void _yiyin_render_text_row(const char *text, const double size_px,
   if(cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS)
   {
     cairo_surface_destroy(surf);
-    _yiyin_text_layout_free(layout, context, fd);
+    _framing_text_layout_free(layout, context, fd);
     return;
   }
   cairo_t *cr = cairo_create(surf);
@@ -1171,10 +1173,10 @@ static void _yiyin_render_text_row(const char *text, const double size_px,
     row->h = h;
   }
   cairo_surface_destroy(surf);
-  _yiyin_text_layout_free(layout, context, fd);
+  _framing_text_layout_free(layout, context, fd);
 }
 
-static void _yiyin_free_text_row(_yiyin_text_row_t *row)
+static void _framing_free_text_row(_framing_text_row_t *row)
 {
   if(row->coverage) dt_free_align(row->coverage);
   row->coverage = NULL;
@@ -1186,44 +1188,44 @@ static void _yiyin_free_text_row(_yiyin_text_row_t *row)
 // ONE place that decides them. `metrics` receives the measured row dims
 // (list order); widths also feed the canvas width so an overlong row widens
 // the frame instead of being clipped.
-#define YIYIN_MAX_ROWS 3
+#define FRAMING_MAX_ROWS 3
 
-typedef struct _yiyin_rows_plan_t
+typedef struct _framing_rows_plan_t
 {
-  char *text[YIYIN_MAX_ROWS];
-  double font_px[YIYIN_MAX_ROWS]; // the size each row is MEASURED and RENDERED at
-  int w[YIYIN_MAX_ROWS], h[YIYIN_MAX_ROWS];
+  char *text[FRAMING_MAX_ROWS];
+  double font_px[FRAMING_MAX_ROWS]; // the size each row is MEASURED and RENDERED at
+  int w[FRAMING_MAX_ROWS], h[FRAMING_MAX_ROWS];
   int n;
   int max_w;
-} _yiyin_rows_plan_t;
+} _framing_rows_plan_t;
 
 // a text row is fitted to the picture's own width, which the yiyin canvas
 // is always at least as wide as: the text shrinks to the frame rather than
 // the frame growing to a paragraph, so the reserved canvas stays bounded
 // however much text is pasted in
-#define YIYIN_ROW_MAX_RATE 1.0
+#define FRAMING_ROW_MAX_RATE 1.0
 
-static void _yiyin_plan_rows(_yiyin_rows_plan_t *plan, const int img_w, const int img_h,
+static void _framing_plan_rows(_framing_rows_plan_t *plan, const int img_w, const int img_h,
                              const dt_iop_borders_data_t *d, const dt_image_t *img)
 {
   memset(plan, 0, sizeof(*plan));
   if(!d->text_show || d->backdrop != DT_IOP_BORDERS_BACKDROP_BLUR) return;
 
   int pw1 = 0, ph1 = 0;
-  _yiyin_pass1_canvas(img_w, img_h, d, &pw1, &ph1);
-  const int max_row_w = MAX(64, (int)((double)img_w * YIYIN_ROW_MAX_RATE));
+  _framing_pass1_canvas(img_w, img_h, d, &pw1, &ph1);
+  const int max_row_w = MAX(64, (int)((double)img_w * FRAMING_ROW_MAX_RATE));
 
-  plan->n = CLAMP(d->text_rows, 0, YIYIN_MAX_ROWS);
+  plan->n = CLAMP(d->text_rows, 0, FRAMING_MAX_ROWS);
   if(plan->n == 0) return;
-  plan->text[0] = _yiyin_expand_pattern(d->text_model, img);
-  plan->text[1] = plan->n > 1 ? _yiyin_expand_pattern(d->text_lens, img) : NULL;
-  plan->text[2] = plan->n > 2 ? _yiyin_expand_pattern(d->text_params, img) : NULL;
-  const float row_size[YIYIN_MAX_ROWS] = { d->text_size1, d->text_size2, d->text_size3 };
+  plan->text[0] = _framing_expand_pattern(d->text_model, img);
+  plan->text[1] = plan->n > 1 ? _framing_expand_pattern(d->text_lens, img) : NULL;
+  plan->text[2] = plan->n > 2 ? _framing_expand_pattern(d->text_params, img) : NULL;
+  const float row_size[FRAMING_MAX_ROWS] = { d->text_size1, d->text_size2, d->text_size3 };
   for(int r = 0; r < plan->n; r++) plan->font_px[r] = (double)pw1 * (row_size[r] / 100.0);
 
   for(int r = 0; r < plan->n; r++)
   {
-    _yiyin_text_metrics(plan->text[r], plan->font_px[r], d->text_font, &plan->w[r], &plan->h[r]);
+    _framing_text_metrics(plan->text[r], plan->font_px[r], d->text_font, &plan->w[r], &plan->h[r]);
     // shrink to fit the cap rather than dropping the row. Advance is not
     // perfectly linear in the size, so re-measure and repeat until the row
     // actually fits (each pass moves the estimate closer; the loop is
@@ -1232,13 +1234,13 @@ static void _yiyin_plan_rows(_yiyin_rows_plan_t *plan, const int img_w, const in
     {
       const double scale = (double)max_row_w / (double)plan->w[r] * 0.98;
       plan->font_px[r] = MAX(2.0, plan->font_px[r] * scale);
-      _yiyin_text_metrics(plan->text[r], plan->font_px[r], d->text_font, &plan->w[r], &plan->h[r]);
+      _framing_text_metrics(plan->text[r], plan->font_px[r], d->text_font, &plan->w[r], &plan->h[r]);
     }
     if(plan->w[r] > plan->max_w) plan->max_w = plan->w[r];
   }
 }
 
-static void _yiyin_free_rows_plan(_yiyin_rows_plan_t *plan)
+static void _framing_free_rows_plan(_framing_rows_plan_t *plan)
 {
   for(int r = 0; r < plan->n; r++)
   {
@@ -1252,7 +1254,7 @@ static void _yiyin_free_rows_plan(_yiyin_rows_plan_t *plan)
 // last-row inflation quirk): the LIST-LAST row sits at the canvas bottom,
 // every earlier row above at round(prevTop - h). row_top[i] receives each
 // input row's top (list order).
-static void _yiyin_stack_text_rows(const _yiyin_text_row_t *rows, const int n_rows,
+static void _framing_stack_text_rows(const _framing_text_row_t *rows, const int n_rows,
                                    const int canvas_w, const int canvas_h,
                                    const double bottom_offset_px,
                                    int *const row_left, int *const row_top)
@@ -1275,15 +1277,15 @@ static void _yiyin_stack_text_rows(const _yiyin_text_row_t *rows, const int n_ro
 
 // blend the rendered rows onto the plane (in-place, linear white by the
 // coverage); rows whose bitmap leaves the canvas are clipped
-static void _yiyin_composite_text_rows(float *const plane, const int plane_w, const int plane_h,
-                                       const _yiyin_text_row_t *rows, const int n_rows,
+static void _framing_composite_text_rows(float *const plane, const int plane_w, const int plane_h,
+                                       const _framing_text_row_t *rows, const int n_rows,
                                        const int *const row_left, const int *const row_top,
                                        const float *const text_color,
                                        const float text_opacity)
 {
   for(int r = 0; r < n_rows; r++)
   {
-    const _yiyin_text_row_t *row = &rows[r];
+    const _framing_text_row_t *row = &rows[r];
     if(!row->coverage) continue;
     const int x0 = MAX(0, row_left[r]);
     const int y0 = MAX(0, row_top[r]);
@@ -1308,14 +1310,14 @@ static void _yiyin_composite_text_rows(float *const plane, const int plane_w, co
 
 // the film strip: picture 1:1 between two black bands, a centered row of
 // light-box holes per band, the edge marking centered in the bottom band
-static void _yiyin_process_film(const float *const in, float *const out,
+static void _framing_process_film(const float *const in, float *const out,
                                 const dt_iop_roi_t *const roi_in,
                                 const dt_iop_roi_t *const roi_out,
                                 const dt_iop_borders_data_t *d)
 {
   // the band is a property of the whole picture; scale it into this plane
-  _yiyin_film_geom_t G;
-  _yiyin_film_geom(&G, roi_in->width, roi_in->height, d);
+  _framing_film_geom_t G;
+  _framing_film_geom(&G, roi_in->width, roi_in->height, d);
   const int cw = roi_out->width, ch = roi_out->height;
   const int ih = roi_in->height;
 
@@ -1357,15 +1359,15 @@ static void _yiyin_process_film(const float *const in, float *const out,
   // the edge marking, centered in the bottom band
   if(d->film_caption[0])
   {
-    _yiyin_text_row_t cap;
+    _framing_text_row_t cap;
     const double font_px = (double)G.band * (d->film_caption_size / 100.0);
-    _yiyin_render_text_row(d->film_caption, font_px, d->film_font, &cap);
+    _framing_render_text_row(d->film_caption, font_px, d->film_font, &cap);
     if(cap.coverage)
     {
       const int left = MAX(0, (cw - cap.w) / 2);
       const int top = G.band + ih + MAX(0, (G.band - cap.h) / 2);
-      _yiyin_composite_text_rows(out, cw, ch, &cap, 1, &left, &top, d->film_caption_color, 1.0f);
-      _yiyin_free_text_row(&cap);
+      _framing_composite_text_rows(out, cw, ch, &cap, 1, &left, &top, d->film_caption_color, 1.0f);
+      _framing_free_text_row(&cap);
     }
   }
 }
@@ -1374,11 +1376,11 @@ static void _yiyin_process_film(const float *const in, float *const out,
 // the blur backdrop proxy: aspect-preserving box downsample of the picture,
 // long edge capped (the yiyin genBlurImg square-stretch quirk is replaced
 // by an aspect-preserving proxy + normalized sampling)
-#define YIYIN_PROXY_LONG_EDGE 2048
+#define FRAMING_PROXY_LONG_EDGE 2048
 
-static void _yiyin_proxy_dims(const int w, const int h, int *pw, int *ph)
+static void _framing_proxy_dims(const int w, const int h, int *pw, int *ph)
 {
-  const int long_edge = MIN(YIYIN_PROXY_LONG_EDGE, MAX(w, h));
+  const int long_edge = MIN(FRAMING_PROXY_LONG_EDGE, MAX(w, h));
   if(MAX(w, h) <= long_edge)
   {
     *pw = w;
@@ -1392,7 +1394,7 @@ static void _yiyin_proxy_dims(const int w, const int h, int *pw, int *ph)
   }
 }
 
-static void _yiyin_box_downsample(const float *const in, const int sw, const int sh,
+static void _framing_box_downsample(const float *const in, const int sw, const int sh,
                                   float *const out, const int dw, const int dh)
 {
   DT_OMP_FOR()
@@ -1433,7 +1435,7 @@ static void _yiyin_box_downsample(const float *const in, const int sw, const int
 
 // the brightness probe: 16x16 box average of the proxy, mapped back to the
 // encoded scale for the tier selection; returns the linear overlay color
-static void _yiyin_probe_overlay(const float *const proxy, const int pw, const int ph,
+static void _framing_probe_overlay(const float *const proxy, const int pw, const int ph,
                                  const int adaptive, dt_aligned_pixel_t overlay,
                                  int *has_overlay)
 {
@@ -1476,24 +1478,24 @@ static void _yiyin_probe_overlay(const float *const proxy, const int pw, const i
   // mean (linear) -> encoded 0-255 scale -> brightness tier -> the gray
   // level as the overlay color, decoded back to linear
   const float brightness8
-      = (_yiyin_srgb_encode(CLAMP(mean[0], 0.0f, 1.0f))
-         + _yiyin_srgb_encode(CLAMP(mean[1], 0.0f, 1.0f))
-         + _yiyin_srgb_encode(CLAMP(mean[2], 0.0f, 1.0f)))
+      = (_framing_srgb_encode(CLAMP(mean[0], 0.0f, 1.0f))
+         + _framing_srgb_encode(CLAMP(mean[1], 0.0f, 1.0f))
+         + _framing_srgb_encode(CLAMP(mean[2], 0.0f, 1.0f)))
         / 3.0f * 255.0f;
 
   float gray8 = 0.0f;
-  const int n_tiers = sizeof(_yiyin_tiers) / sizeof(_yiyin_tiers[0]);
+  const int n_tiers = sizeof(_framing_tiers) / sizeof(_framing_tiers[0]);
   for(int t = 0; t < n_tiers; t++)
   {
-    if(brightness8 < _yiyin_tiers[t][0])
+    if(brightness8 < _framing_tiers[t][0])
     {
-      gray8 = _yiyin_tiers[t][1];
+      gray8 = _framing_tiers[t][1];
       break;
     }
   }
   if(gray8 <= 0.0f) return;
 
-  const float g = _yiyin_srgb_decode(gray8 / 255.0f);
+  const float g = _framing_srgb_decode(gray8 / 255.0f);
   overlay[0] = g;
   overlay[1] = g;
   overlay[2] = g;
@@ -1502,7 +1504,7 @@ static void _yiyin_probe_overlay(const float *const proxy, const int pw, const i
 }
 
 // bilinear clamp-to-edge sample of the proxy at normalized canvas coords
-static void _yiyin_sample_proxy(const float *const proxy, const int pw, const int ph,
+static void _framing_sample_proxy(const float *const proxy, const int pw, const int ph,
                                 const float u, const float v, float *const out)
 {
   const float fx = CLAMP(u * pw - 0.5f, 0.0f, (float)(pw - 1));
@@ -1529,7 +1531,7 @@ static void _yiyin_sample_proxy(const float *const proxy, const int pw, const in
 // origin scaled, minus the plane's canvas offset) and `radius` is already in
 // plane pixels -- passing raw canvas values here is what misaligned the
 // shadow once the viewport could move.
-static float *_yiyin_shadow_plane(const int pic_x, const int pic_y,
+static float *_framing_shadow_plane(const int pic_x, const int pic_y,
                                   const int iw, const int ih,
                                   const int plane_w, const int plane_h,
                                   const float radius, const double sigma,
@@ -1558,7 +1560,7 @@ static float *_yiyin_shadow_plane(const int pic_x, const int pic_y,
     {
       const float px = i + *sub_x + 0.5f;
       plane[(size_t)j * (*sub_w) + i] =
-        _yiyin_rect_coverage(px, py, cx, cy, hx, hy, radius);
+        _framing_rect_coverage(px, py, cx, cy, hx, hy, radius);
     }
   }
 
@@ -1580,7 +1582,7 @@ static float *_yiyin_shadow_plane(const int pic_x, const int pic_y,
 // the blur-mode render leg (yiyin backdrop): proxy + dim overlay + shadow +
 // the rounded picture, plus the info rows. The caller has dispatched the
 // identity case; this always composes.
-static void _yiyin_render_blur(dt_iop_module_t *self,
+static void _framing_render_blur(dt_iop_module_t *self,
                                dt_dev_pixelpipe_iop_t *piece,
                                const void *const ivoid,
                                void *const ovoid,
@@ -1594,21 +1596,21 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   // the picture info rows: the planner sizes the fonts and measures the
   // texts, the render rasterizes them from the SAME plan so the reserved
   // canvas and the drawn bitmaps cannot disagree
-  _yiyin_text_row_t rows[YIYIN_MAX_ROWS];
-  for(int r = 0; r < YIYIN_MAX_ROWS; r++)
+  _framing_text_row_t rows[FRAMING_MAX_ROWS];
+  for(int r = 0; r < FRAMING_MAX_ROWS; r++)
   {
     rows[r].coverage = NULL;
     rows[r].w = rows[r].h = 0;
   }
-  int rows_w[YIYIN_MAX_ROWS] = { 0, 0, 0 }, rows_h[YIYIN_MAX_ROWS] = { 0, 0, 0 };
+  int rows_w[FRAMING_MAX_ROWS] = { 0, 0, 0 }, rows_h[FRAMING_MAX_ROWS] = { 0, 0, 0 };
   // the plan must describe the WHOLE picture: it is what the canvas was
   // sized for, and a viewport-sized plan would change the text size and the
   // reserved slot on every zoom step
   const int pic_w_full = piece->buf_in.width;
   const int pic_h_full = piece->buf_in.height;
   const float sc = roi_out->scale;
-  _yiyin_rows_plan_t plan;
-  _yiyin_plan_rows(&plan, pic_w_full, pic_h_full, d, &piece->pipe->image);
+  _framing_rows_plan_t plan;
+  _framing_plan_rows(&plan, pic_w_full, pic_h_full, d, &piece->pipe->image);
   const int n_rows = plan.n;
   // the layout takes the plan's own (unscaled) metrics; the bitmaps rasterise
   // at the plane's scale
@@ -1620,12 +1622,12 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   if(n_rows)
   {
     for(int r = 0; r < n_rows; r++)
-      _yiyin_render_text_row(plan.text[r], plan.font_px[r] * sc, d->text_font, &rows[r]);
+      _framing_render_text_row(plan.text[r], plan.font_px[r] * sc, d->text_font, &rows[r]);
   }
-  _yiyin_free_rows_plan(&plan);
+  _framing_free_rows_plan(&plan);
 
-  _yiyin_layout_t L;
-  _yiyin_layout(&L, pic_w_full, pic_h_full, d, rows_w, rows_h, n_rows);
+  _framing_layout_t L;
+  _framing_layout(&L, pic_w_full, pic_h_full, d, rows_w, rows_h, n_rows);
   const int cw = roi_out->width, ch = roi_out->height;
   // the picture scaled into this plane (geometry uses this, sampling uses roi_in)
   const int pic_w_s = MAX(1, (int)roundf((float)piece->buf_in.width * sc));
@@ -1636,11 +1638,11 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   int pw = 0, ph = 0;
   if(d->backdrop == DT_IOP_BORDERS_BACKDROP_BLUR)
   {
-    _yiyin_proxy_dims(pic_w_s, pic_h_s, &pw, &ph);
+    _framing_proxy_dims(pic_w_s, pic_h_s, &pw, &ph);
     proxy = dt_alloc_align_float((size_t)pw * ph * 4);
     if(proxy)
     {
-      _yiyin_box_downsample(in, roi_in->width, roi_in->height, proxy, pw, ph);
+      _framing_box_downsample(in, roi_in->width, roi_in->height, proxy, pw, ph);
       // sigma on the proxy: amount% * canvas height * 0.5, rescaled to the
       // proxy by the vertical mapping
       const double sigma_canvas = (d->blur_amount / 100.0) * ch * 0.5;
@@ -1660,7 +1662,7 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   dt_aligned_pixel_t overlay = { 0.0f };
   int has_overlay = 0;
   if(d->backdrop == DT_IOP_BORDERS_BACKDROP_BLUR && proxy)
-    _yiyin_probe_overlay(proxy, pw, ph, d->adaptive_backdrop, overlay, &has_overlay);
+    _framing_probe_overlay(proxy, pw, ph, d->adaptive_backdrop, overlay, &has_overlay);
 
   // geometry, output-plane px: canvas values scaled into this plane, then
   // shifted by the plane's own canvas offset
@@ -1685,7 +1687,7 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   if(L.shadow_blur > 0.0)
   {
     const double sigma = L.shadow_blur * 0.5 * sc;
-    shadow = _yiyin_shadow_plane(pic_x, pic_y, pic_w_s, pic_h_s,
+    shadow = _framing_shadow_plane(pic_x, pic_y, pic_w_s, pic_h_s,
                                  roi_out->width, roi_out->height,
                                  radius, sigma, &sub_x, &sub_y, &sub_w, &sub_h);
   }
@@ -1707,7 +1709,7 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
       {
         const float canvas_x = (float)(i + roi_out->x);
         const float canvas_y = (float)(j + roi_out->y);
-        _yiyin_sample_proxy(proxy, pw, ph,
+        _framing_sample_proxy(proxy, pw, ph,
                             canvas_x / (float)canvas_w_s, canvas_y / (float)canvas_h_s, o);
       }
       else
@@ -1747,7 +1749,7 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
         const int bx = su - roi_in->x, by = sv - roi_in->y;
         if(bx < 0 || by < 0 || bx >= roi_in->width || by >= roi_in->height) { o[3] = 1.0f; o += 4; continue; }
         const float *m = in + ((size_t)by * roi_in->width + bx) * 4;
-        const float cover = _yiyin_rect_coverage(px, py, cx, cy, hx, hy, radius);
+        const float cover = _framing_rect_coverage(px, py, cx, cy, hx, hy, radius);
         o[0] = o[0] + (m[0] - o[0]) * cover;
         o[1] = o[1] + (m[1] - o[1]) * cover;
         o[2] = o[2] + (m[2] - o[2]) * cover;
@@ -1760,10 +1762,10 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
   // 5. the picture info rows, stacked bottom-up into the bottom slot
   if(n_rows)
   {
-    int row_left[YIYIN_MAX_ROWS], row_top[YIYIN_MAX_ROWS];
+    int row_left[FRAMING_MAX_ROWS], row_top[FRAMING_MAX_ROWS];
     // the rows stack against the CANVAS (scaled), not this viewport; shifting
     // them by the plane's canvas offset is what keeps them in the frame
-    _yiyin_stack_text_rows(rows, n_rows, canvas_w_s, canvas_h_s,
+    _framing_stack_text_rows(rows, n_rows, canvas_w_s, canvas_h_s,
                            L.text_bottom * sc, row_left, row_top);
     for(int r = 0; r < n_rows; r++)
     {
@@ -1771,10 +1773,10 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
       row_top[r] -= roi_out->y;
     }
     const float white[3] = { 1.0f, 1.0f, 1.0f };
-    _yiyin_composite_text_rows(out, cw, ch, rows, n_rows, row_left, row_top, white,
+    _framing_composite_text_rows(out, cw, ch, rows, n_rows, row_left, row_top, white,
                                d->text_opacity / 100.0f);
   }
-  for(int r = 0; r < 2; r++) _yiyin_free_text_row(&rows[r]);
+  for(int r = 0; r < 2; r++) _framing_free_text_row(&rows[r]);
 
   if(proxy) dt_free_align(proxy);
   if(shadow) dt_free_align(shadow);
@@ -1787,7 +1789,7 @@ static void _yiyin_render_blur(dt_iop_module_t *self,
 // pack the placed rows into one float4 coverage texture (each row blitted
 // to its own offset inside the union bbox) and return the bbox destination
 // on the plane
-static void _yiyin_pack_text_tex(const _yiyin_text_row_t *rows, const int *const row_left,
+static void _framing_pack_text_tex(const _framing_text_row_t *rows, const int *const row_left,
                                  const int *const row_top, const int n,
                                  float **tex_out, int *tex_w, int *tex_h,
                                  int *dest_x, int *dest_y)
@@ -1833,7 +1835,7 @@ static void _yiyin_pack_text_tex(const _yiyin_text_row_t *rows, const int *const
   *dest_y = min_y;
 }
 
-static cl_mem _yiyin_upload_tex(const int devid, const float *tex, const int tw, const int th)
+static cl_mem _framing_upload_tex(const int devid, const float *tex, const int tw, const int th)
 {
   cl_mem m = dt_opencl_alloc_device(devid, tw, th, 4 * sizeof(float));
   if(m && dt_opencl_write_host_to_image(devid, tex, m, tw, th, 4 * sizeof(float)) != CL_SUCCESS)
@@ -1846,7 +1848,7 @@ static cl_mem _yiyin_upload_tex(const int devid, const float *tex, const int tw,
 
 // composite the text texture over a bbox of the plane: copy the bbox aside,
 // run the text_over kernel writing back into the plane, release the copy
-static cl_int _yiyin_cl_text_over(dt_iop_borders_global_data_t *gd, const int devid,
+static cl_int _framing_cl_text_over(dt_iop_borders_global_data_t *gd, const int devid,
                                   cl_mem dev_out, cl_mem dev_tex,
                                   const int tex_w, const int tex_h,
                                   const int dest_x, const int dest_y,
@@ -1866,7 +1868,7 @@ static cl_int _yiyin_cl_text_over(dt_iop_borders_global_data_t *gd, const int de
   cl_int err = dt_opencl_enqueue_copy_image(devid, dev_out, dev_tmp, src_origin, dst_origin,
                                             region);
   if(err == CL_SUCCESS)
-    err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_yiyin_text_over, bw, bh,
+    err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_framing_text_over, bw, bh,
                                            CLARG(dev_tmp), CLARG(dev_out), CLARG(dev_tex),
                                            CLARG(bx0), CLARG(by0),
                                            CLARG(dest_x), CLARG(dest_y),
@@ -1879,20 +1881,20 @@ static cl_int _yiyin_cl_text_over(dt_iop_borders_global_data_t *gd, const int de
 
 // the film strip on device: one geometric composite pass, then the edge
 // marking text rendered on the host and composited over the bottom band
-static cl_int _yiyin_process_film_cl(dt_iop_borders_global_data_t *gd, const int devid,
+static cl_int _framing_process_film_cl(dt_iop_borders_global_data_t *gd, const int devid,
                                      cl_mem dev_in, cl_mem dev_out,
                                      const dt_iop_roi_t *const roi_in,
                                      const dt_iop_roi_t *const roi_out,
                                      const dt_iop_borders_data_t *d)
 {
-  _yiyin_film_geom_t G;
-  _yiyin_film_geom(&G, roi_in->width, roi_in->height, d);
+  _framing_film_geom_t G;
+  _framing_film_geom(&G, roi_in->width, roi_in->height, d);
   const int cw = roi_out->width, ch = roi_out->height;
   const float black_r = (float)G.black[0], black_g = (float)G.black[1], black_b = (float)G.black[2];
   const float hole_r = (float)G.hole[0], hole_g = (float)G.hole[1], hole_b = (float)G.hole[2];
 
   cl_int err = dt_opencl_enqueue_kernel_2d_args
-    (devid, gd->kernel_yiyin_film_composite, cw, ch,
+    (devid, gd->kernel_framing_film_composite, cw, ch,
      CLARG(dev_in), CLARG(dev_out),
      CLARGINT(roi_in->width), CLARGINT(roi_in->height),
      CLARG(cw), CLARG(ch),
@@ -1904,28 +1906,28 @@ static cl_int _yiyin_process_film_cl(dt_iop_borders_global_data_t *gd, const int
 
   if(d->film_caption[0])
   {
-    _yiyin_text_row_t cap;
+    _framing_text_row_t cap;
     const double font_px = (double)G.band * (d->film_caption_size / 100.0);
-    _yiyin_render_text_row(d->film_caption, font_px, d->film_font, &cap);
+    _framing_render_text_row(d->film_caption, font_px, d->film_font, &cap);
     if(cap.coverage)
     {
       const int left = MAX(0, (cw - cap.w) / 2);
       const int top = G.band + roi_in->height + MAX(0, (G.band - cap.h) / 2);
       float *tex = NULL;
       int tex_w = 0, tex_h = 0, tex_x = 0, tex_y = 0;
-      _yiyin_pack_text_tex(&cap, &left, &top, 1, &tex, &tex_w, &tex_h, &tex_x, &tex_y);
+      _framing_pack_text_tex(&cap, &left, &top, 1, &tex, &tex_w, &tex_h, &tex_x, &tex_y);
       if(tex)
       {
-        cl_mem dev_tex = _yiyin_upload_tex(devid, tex, tex_w, tex_h);
+        cl_mem dev_tex = _framing_upload_tex(devid, tex, tex_w, tex_h);
         if(dev_tex)
         {
-          err = _yiyin_cl_text_over(gd, devid, dev_out, dev_tex, tex_w, tex_h,
+          err = _framing_cl_text_over(gd, devid, dev_out, dev_tex, tex_w, tex_h,
                                     tex_x, tex_y, cw, ch, d->film_caption_color, 1.0f);
           dt_opencl_release_mem_object(dev_tex);
         }
         dt_free_align(tex);
       }
-      _yiyin_free_text_row(&cap);
+      _framing_free_text_row(&cap);
     }
   }
   return err;
@@ -1933,7 +1935,7 @@ static cl_int _yiyin_process_film_cl(dt_iop_borders_global_data_t *gd, const int
 
 
 // the blur-mode render leg on device
-static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
+static cl_int _framing_render_blur_cl(dt_iop_module_t *self,
                                     dt_dev_pixelpipe_iop_t *piece,
                                     cl_mem dev_in,
                                     cl_mem dev_out,
@@ -1948,8 +1950,8 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   // the picture info rows: the planner sizes the fonts and measures the
   // texts, the render rasterizes them from the SAME plan so the reserved
   // canvas and the drawn bitmaps cannot disagree
-  _yiyin_text_row_t rows[YIYIN_MAX_ROWS];
-  for(int r = 0; r < YIYIN_MAX_ROWS; r++)
+  _framing_text_row_t rows[FRAMING_MAX_ROWS];
+  for(int r = 0; r < FRAMING_MAX_ROWS; r++)
   {
     rows[r].coverage = NULL;
     rows[r].w = rows[r].h = 0;
@@ -1958,9 +1960,9 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   const int pic_w_full = piece->buf_in.width;
   const int pic_h_full = piece->buf_in.height;
   const float sc = roi_out->scale;
-  int rows_w[YIYIN_MAX_ROWS] = { 0, 0, 0 }, rows_h[YIYIN_MAX_ROWS] = { 0, 0, 0 };
-  _yiyin_rows_plan_t plan;
-  _yiyin_plan_rows(&plan, pic_w_full, pic_h_full, d, &piece->pipe->image);
+  int rows_w[FRAMING_MAX_ROWS] = { 0, 0, 0 }, rows_h[FRAMING_MAX_ROWS] = { 0, 0, 0 };
+  _framing_rows_plan_t plan;
+  _framing_plan_rows(&plan, pic_w_full, pic_h_full, d, &piece->pipe->image);
   const int n_rows = plan.n;
   // the layout takes the plan's OWN (unscaled) metrics -- scaling the
   // rendered bitmaps back down would compound rounding and drift the canvas
@@ -1969,16 +1971,16 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
     rows_w[r] = plan.w[r];
     rows_h[r] = plan.h[r];
   }
-  _yiyin_layout_t L;
-  _yiyin_layout(&L, pic_w_full, pic_h_full, d, rows_w, rows_h, n_rows);
+  _framing_layout_t L;
+  _framing_layout(&L, pic_w_full, pic_h_full, d, rows_w, rows_h, n_rows);
 
   // the bitmaps are rasterised at the plane's scale
   if(n_rows)
   {
     for(int r = 0; r < n_rows; r++)
-      _yiyin_render_text_row(plan.text[r], plan.font_px[r] * sc, d->text_font, &rows[r]);
+      _framing_render_text_row(plan.text[r], plan.font_px[r] * sc, d->text_font, &rows[r]);
   }
-  _yiyin_free_rows_plan(&plan);
+  _framing_free_rows_plan(&plan);
   const int cw = roi_out->width, ch = roi_out->height;
 
   // composite/SDF geometry, output-plane px
@@ -2010,16 +2012,16 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   const int wants_blur = d->backdrop == DT_IOP_BORDERS_BACKDROP_BLUR;
   if(wants_blur)
   {
-    _yiyin_proxy_dims(pic_w_s, pic_h_s, &pw, &ph);
+    _framing_proxy_dims(pic_w_s, pic_h_s, &pw, &ph);
     dev_proxy = dt_opencl_alloc_device(devid, pw, ph, 4 * sizeof(float));
     dev_proxy2 = dt_opencl_alloc_device(devid, pw, ph, 4 * sizeof(float));
     if(!dev_proxy || !dev_proxy2)
     {
-      dt_print(DT_DEBUG_OPENCL, "[yiyin] can't allocate proxy buffers on gpu");
+      dt_print(DT_DEBUG_OPENCL, "[framing] can't allocate proxy buffers on gpu");
       err = CL_MEM_OBJECT_ALLOCATION_FAILURE;
       goto finish;
     }
-    err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_yiyin_downsample, pw, ph,
+    err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_framing_downsample, pw, ph,
                                            CLARG(dev_in), CLARG(dev_proxy),
                                            CLARG(roi_in->width), CLARG(roi_in->height),
                                            CLARG(pw), CLARG(ph));
@@ -2053,7 +2055,7 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
     cl_mem dev_probe = dt_opencl_alloc_device(devid, probe_w, probe_h, 4 * sizeof(float));
     if(dev_probe)
     {
-      cl_int e = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_yiyin_downsample,
+      cl_int e = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_framing_downsample,
                                                   probe_w, probe_h,
                                                   CLARG(dev_in), CLARG(dev_probe),
                                                   CLARG(roi_in->width), CLARG(roi_in->height),
@@ -2077,23 +2079,23 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
                                   acc[1] / (probe_w * probe_h),
                                   acc[2] / (probe_w * probe_h) };
           const float brightness8
-              = (_yiyin_srgb_encode(CLAMP(mean[0], 0.0f, 1.0f))
-                 + _yiyin_srgb_encode(CLAMP(mean[1], 0.0f, 1.0f))
-                 + _yiyin_srgb_encode(CLAMP(mean[2], 0.0f, 1.0f)))
+              = (_framing_srgb_encode(CLAMP(mean[0], 0.0f, 1.0f))
+                 + _framing_srgb_encode(CLAMP(mean[1], 0.0f, 1.0f))
+                 + _framing_srgb_encode(CLAMP(mean[2], 0.0f, 1.0f)))
                 / 3.0f * 255.0f;
-          const int n_tiers = sizeof(_yiyin_tiers) / sizeof(_yiyin_tiers[0]);
+          const int n_tiers = sizeof(_framing_tiers) / sizeof(_framing_tiers[0]);
           float gray8 = 0.0f;
           for(int t = 0; t < n_tiers; t++)
           {
-            if(brightness8 < _yiyin_tiers[t][0])
+            if(brightness8 < _framing_tiers[t][0])
             {
-              gray8 = _yiyin_tiers[t][1];
+              gray8 = _framing_tiers[t][1];
               break;
             }
           }
           if(gray8 > 0.0f)
           {
-            const float gg = _yiyin_srgb_decode(gray8 / 255.0f);
+            const float gg = _framing_srgb_decode(gray8 / 255.0f);
             overlay[0] = gg;
             overlay[1] = gg;
             overlay[2] = gg;
@@ -2124,11 +2126,11 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
       if(!dev_shadow || !dev_shadow2)
       {
         if(dev_shadow2) dt_opencl_release_mem_object(dev_shadow2);
-        dt_print(DT_DEBUG_OPENCL, "[yiyin] can't allocate shadow buffers on gpu");
+        dt_print(DT_DEBUG_OPENCL, "[framing] can't allocate shadow buffers on gpu");
         err = CL_MEM_OBJECT_ALLOCATION_FAILURE;
         goto finish;
       }
-      err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_yiyin_shadow_sdf, sub_w, sub_h,
+      err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_framing_shadow_sdf, sub_w, sub_h,
                                              CLARG(dev_shadow),
                                              CLARG(sub_w), CLARG(sub_h),
                                              CLARG(sdf_cx), CLARG(sdf_cy),
@@ -2178,7 +2180,7 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   cl_mem shadow_arg = dev_shadow ? dev_shadow : dev_in;
   const int has_shadow_arg = dev_shadow ? 1 : 0;
   err = dt_opencl_enqueue_kernel_2d_args
-    (devid, gd->kernel_yiyin_composite, cw, ch,
+    (devid, gd->kernel_framing_composite, cw, ch,
      CLARG(dev_in), CLARG(blur_arg), CLARG(shadow_arg),
      CLARG(dev_out),
      CLARG(has_blur), CLARG(has_overlay),
@@ -2199,8 +2201,8 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
   // 5. the picture info rows over the composited plane
   if(err == CL_SUCCESS && n_rows)
   {
-    int row_left[YIYIN_MAX_ROWS], row_top[YIYIN_MAX_ROWS];
-    _yiyin_stack_text_rows(rows, n_rows, canvas_w_s, canvas_h_s,
+    int row_left[FRAMING_MAX_ROWS], row_top[FRAMING_MAX_ROWS];
+    _framing_stack_text_rows(rows, n_rows, canvas_w_s, canvas_h_s,
                            L.text_bottom * sc, row_left, row_top);
     for(int r = 0; r < n_rows; r++)
     {
@@ -2209,14 +2211,14 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
     }
     float *tex = NULL;
     int tex_w = 0, tex_h = 0, tex_x = 0, tex_y = 0;
-    _yiyin_pack_text_tex(rows, row_left, row_top, n_rows, &tex, &tex_w, &tex_h, &tex_x, &tex_y);
+    _framing_pack_text_tex(rows, row_left, row_top, n_rows, &tex, &tex_w, &tex_h, &tex_x, &tex_y);
     if(tex)
     {
-      cl_mem dev_tex = _yiyin_upload_tex(devid, tex, tex_w, tex_h);
+      cl_mem dev_tex = _framing_upload_tex(devid, tex, tex_w, tex_h);
       if(dev_tex)
       {
         const float white[3] = { 1.0f, 1.0f, 1.0f };
-        const cl_int e = _yiyin_cl_text_over(gd, devid, dev_out, dev_tex, tex_w, tex_h,
+        const cl_int e = _framing_cl_text_over(gd, devid, dev_out, dev_tex, tex_w, tex_h,
                                              tex_x, tex_y, cw, ch, white,
                                              d->text_opacity / 100.0f);
         if(e != CL_SUCCESS) err = e;
@@ -2225,7 +2227,7 @@ static cl_int _yiyin_render_blur_cl(dt_iop_module_t *self,
       dt_free_align(tex);
     }
   }
-  for(int r = 0; r < 2; r++) _yiyin_free_text_row(&rows[r]);
+  for(int r = 0; r < 2; r++) _framing_free_text_row(&rows[r]);
 
 finish:
   if(dev_proxy) dt_opencl_release_mem_object(dev_proxy);
@@ -2292,12 +2294,12 @@ gboolean distort_transform(dt_iop_module_t *self,
   if(d->mode != DT_IOP_BORDERS_MODE_BASIC)
   {
     // blur/film: the picture sits at its layout origin on the grown canvas
-    if(_yiyin_is_identity(d)) return TRUE;
-    _yiyin_layout_t L;
+    if(_framing_is_identity(d)) return TRUE;
+    _framing_layout_t L;
     if(d->mode == DT_IOP_BORDERS_MODE_FILM)
     {
-      _yiyin_film_geom_t G;
-      _yiyin_film_geom(&G, piece->buf_in.width, piece->buf_in.height, d);
+      _framing_film_geom_t G;
+      _framing_film_geom(&G, piece->buf_in.width, piece->buf_in.height, d);
       const float dx = 0.0f, dy = (float)G.band;
       float *const pts = DT_IS_ALIGNED(points);
       DT_OMP_FOR(if(points_count > 100))
@@ -2308,13 +2310,13 @@ gboolean distort_transform(dt_iop_module_t *self,
       }
       return TRUE;
     }
-    int rows_w[YIYIN_MAX_ROWS] = { 0, 0, 0 }, rows_h[YIYIN_MAX_ROWS] = { 0, 0, 0 };
-    _yiyin_rows_plan_t plan;
-    _yiyin_plan_rows(&plan, piece->buf_in.width, piece->buf_in.height, d, &piece->pipe->image);
+    int rows_w[FRAMING_MAX_ROWS] = { 0, 0, 0 }, rows_h[FRAMING_MAX_ROWS] = { 0, 0, 0 };
+    _framing_rows_plan_t plan;
+    _framing_plan_rows(&plan, piece->buf_in.width, piece->buf_in.height, d, &piece->pipe->image);
     for(int r = 0; r < plan.n; r++) { rows_w[r] = plan.w[r]; rows_h[r] = plan.h[r]; }
     const int n_rows = plan.n;
-    _yiyin_free_rows_plan(&plan);
-    _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d, rows_w, rows_h, n_rows);
+    _framing_free_rows_plan(&plan);
+    _framing_layout(&L, piece->buf_in.width, piece->buf_in.height, d, rows_w, rows_h, n_rows);
     const float dx = (float)L.main_left, dy = (float)L.main_top;
     float *const pts = DT_IS_ALIGNED(points);
     DT_OMP_FOR(if(points_count > 100))
@@ -2355,24 +2357,24 @@ gboolean distort_backtransform(dt_iop_module_t *self,
 
   if(d->mode != DT_IOP_BORDERS_MODE_BASIC)
   {
-    if(_yiyin_is_identity(d)) return TRUE;
-    _yiyin_layout_t L;
+    if(_framing_is_identity(d)) return TRUE;
+    _framing_layout_t L;
     float dx = 0.0f, dy = 0.0f;
     if(d->mode == DT_IOP_BORDERS_MODE_FILM)
     {
-      _yiyin_film_geom_t G;
-      _yiyin_film_geom(&G, piece->buf_in.width, piece->buf_in.height, d);
+      _framing_film_geom_t G;
+      _framing_film_geom(&G, piece->buf_in.width, piece->buf_in.height, d);
       dy = (float)G.band;
     }
     else
     {
-      int rows_w[YIYIN_MAX_ROWS] = { 0, 0, 0 }, rows_h[YIYIN_MAX_ROWS] = { 0, 0, 0 };
-      _yiyin_rows_plan_t plan;
-      _yiyin_plan_rows(&plan, piece->buf_in.width, piece->buf_in.height, d, &piece->pipe->image);
+      int rows_w[FRAMING_MAX_ROWS] = { 0, 0, 0 }, rows_h[FRAMING_MAX_ROWS] = { 0, 0, 0 };
+      _framing_rows_plan_t plan;
+      _framing_plan_rows(&plan, piece->buf_in.width, piece->buf_in.height, d, &piece->pipe->image);
       for(int r = 0; r < plan.n; r++) { rows_w[r] = plan.w[r]; rows_h[r] = plan.h[r]; }
       const int n_rows = plan.n;
-      _yiyin_free_rows_plan(&plan);
-      _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d, rows_w, rows_h, n_rows);
+      _framing_free_rows_plan(&plan);
+      _framing_layout(&L, piece->buf_in.width, piece->buf_in.height, d, rows_w, rows_h, n_rows);
       dx = (float)L.main_left;
       dy = (float)L.main_top;
     }
@@ -2420,20 +2422,20 @@ void distort_mask(dt_iop_module_t *self,
     int bx = 0, by = 0;
     if(d->mode == DT_IOP_BORDERS_MODE_FILM)
     {
-      _yiyin_film_geom_t G;
-      _yiyin_film_geom(&G, roi_in->width, roi_in->height, d);
+      _framing_film_geom_t G;
+      _framing_film_geom(&G, roi_in->width, roi_in->height, d);
       by = G.band;
     }
-    else if(!_yiyin_is_identity(d))
+    else if(!_framing_is_identity(d))
     {
-      _yiyin_layout_t L;
-      int rows_w[YIYIN_MAX_ROWS] = { 0, 0, 0 }, rows_h[YIYIN_MAX_ROWS] = { 0, 0, 0 };
-      _yiyin_rows_plan_t plan;
-      _yiyin_plan_rows(&plan, roi_in->width, roi_in->height, d, &piece->pipe->image);
+      _framing_layout_t L;
+      int rows_w[FRAMING_MAX_ROWS] = { 0, 0, 0 }, rows_h[FRAMING_MAX_ROWS] = { 0, 0, 0 };
+      _framing_rows_plan_t plan;
+      _framing_plan_rows(&plan, roi_in->width, roi_in->height, d, &piece->pipe->image);
       for(int r = 0; r < plan.n; r++) { rows_w[r] = plan.w[r]; rows_h[r] = plan.h[r]; }
       const int n_rows = plan.n;
-      _yiyin_free_rows_plan(&plan);
-      _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_w, rows_h, n_rows);
+      _framing_free_rows_plan(&plan);
+      _framing_layout(&L, roi_in->width, roi_in->height, d, rows_w, rows_h, n_rows);
       bx = CLAMP(L.main_left, 0, roi_out->width - roi_in->width);
       by = CLAMP(L.main_top, 0, roi_out->height - roi_in->height);
     }
@@ -2484,23 +2486,23 @@ void modify_roi_out(dt_iop_module_t *self,
   if(d->mode == DT_IOP_BORDERS_MODE_FILM)
   {
     if(d->film_band <= 0.0f) return;
-    _yiyin_film_geom_t G;
-    _yiyin_film_geom(&G, roi_in->width, roi_in->height, d);
+    _framing_film_geom_t G;
+    _framing_film_geom(&G, roi_in->width, roi_in->height, d);
     roi_out->height = MIN(roi_in->height + 2 * G.band, roi_in->height * 8);
     return;
   }
 
   if(d->mode == DT_IOP_BORDERS_MODE_BLUR)
   {
-    if(_yiyin_is_identity(d)) return;
-    int rows_w[YIYIN_MAX_ROWS] = { 0, 0, 0 }, rows_h[YIYIN_MAX_ROWS] = { 0, 0, 0 };
-    _yiyin_rows_plan_t plan;
-    _yiyin_plan_rows(&plan, roi_in->width, roi_in->height, d, &piece->pipe->image);
+    if(_framing_is_identity(d)) return;
+    int rows_w[FRAMING_MAX_ROWS] = { 0, 0, 0 }, rows_h[FRAMING_MAX_ROWS] = { 0, 0, 0 };
+    _framing_rows_plan_t plan;
+    _framing_plan_rows(&plan, roi_in->width, roi_in->height, d, &piece->pipe->image);
     for(int r = 0; r < plan.n; r++) { rows_w[r] = plan.w[r]; rows_h[r] = plan.h[r]; }
     const int n_rows = plan.n;
-    _yiyin_free_rows_plan(&plan);
-    _yiyin_layout_t L;
-    _yiyin_layout(&L, roi_in->width, roi_in->height, d, rows_w, rows_h, n_rows);
+    _framing_free_rows_plan(&plan);
+    _framing_layout_t L;
+    _framing_layout(&L, roi_in->width, roi_in->height, d, rows_w, rows_h, n_rows);
     roi_out->width = MIN(MAX(L.canvas_w, roi_in->width), roi_in->width * 8);
     roi_out->height = MIN(MAX(L.canvas_h, roi_in->height), roi_in->height * 8);
     return;
@@ -2619,21 +2621,21 @@ void modify_roi_in(dt_iop_module_t *self,
     int origin_x = 0, origin_y = 0;
     if(d->mode == DT_IOP_BORDERS_MODE_FILM)
     {
-      _yiyin_film_geom_t G;
-      _yiyin_film_geom(&G, piece->buf_in.width, piece->buf_in.height, d);
+      _framing_film_geom_t G;
+      _framing_film_geom(&G, piece->buf_in.width, piece->buf_in.height, d);
       origin_y = (int)roundf(G.band * roi_out->scale);
     }
-    else if(!_yiyin_is_identity(d))
+    else if(!_framing_is_identity(d))
     {
-      int rows_w[YIYIN_MAX_ROWS] = { 0, 0, 0 }, rows_h[YIYIN_MAX_ROWS] = { 0, 0, 0 };
-      _yiyin_rows_plan_t plan;
-      _yiyin_plan_rows(&plan, piece->buf_in.width, piece->buf_in.height, d,
+      int rows_w[FRAMING_MAX_ROWS] = { 0, 0, 0 }, rows_h[FRAMING_MAX_ROWS] = { 0, 0, 0 };
+      _framing_rows_plan_t plan;
+      _framing_plan_rows(&plan, piece->buf_in.width, piece->buf_in.height, d,
                        &piece->pipe->image);
       for(int r = 0; r < plan.n; r++) { rows_w[r] = plan.w[r]; rows_h[r] = plan.h[r]; }
       const int n_rows = plan.n;
-      _yiyin_free_rows_plan(&plan);
-      _yiyin_layout_t L;
-      _yiyin_layout(&L, piece->buf_in.width, piece->buf_in.height, d,
+      _framing_free_rows_plan(&plan);
+      _framing_layout_t L;
+      _framing_layout(&L, piece->buf_in.width, piece->buf_in.height, d,
                     rows_w, rows_h, n_rows);
       origin_x = (int)roundf(L.main_left * roi_out->scale);
       origin_y = (int)roundf(L.main_top * roi_out->scale);
@@ -2700,13 +2702,13 @@ void process(dt_iop_module_t *self,
       dt_iop_copy_image_roi(out, in, 4, roi_in, roi_out);
       return;
     }
-    _yiyin_process_film(in, out, roi_in, roi_out, d);
+    _framing_process_film(in, out, roi_in, roi_out, d);
     return;
   }
 
   if(d->mode == DT_IOP_BORDERS_MODE_BLUR)
   {
-    if(_yiyin_is_identity(d))
+    if(_framing_is_identity(d))
     {
       if(roi_out->width == roi_in->width && roi_out->height == roi_in->height)
         memcpy(out, in, sizeof(float) * (size_t)roi_out->width * roi_out->height * 4);
@@ -2714,7 +2716,7 @@ void process(dt_iop_module_t *self,
         dt_iop_copy_image_roi(out, in, 4, roi_in, roi_out);
       return;
     }
-    _yiyin_render_blur(self, piece, ivoid, ovoid, roi_in, roi_out, d);
+    _framing_render_blur(self, piece, ivoid, ovoid, roi_in, roi_out, d);
     return;
   }
 
@@ -2747,18 +2749,18 @@ int process_cl(dt_iop_module_t *self,
       return dt_opencl_enqueue_copy_image(devid, dev_in, dev_out, CLIMG_ORIGIN, CLIMG_ORIGIN,
                                           region);
     }
-    return _yiyin_process_film_cl(gd, devid, dev_in, dev_out, roi_in, roi_out, d);
+    return _framing_process_film_cl(gd, devid, dev_in, dev_out, roi_in, roi_out, d);
   }
 
   if(d->mode == DT_IOP_BORDERS_MODE_BLUR)
   {
-    if(_yiyin_is_identity(d))
+    if(_framing_is_identity(d))
     {
       const size_t region[3] = { roi_in->width, roi_in->height, 1 };
       return dt_opencl_enqueue_copy_image(devid, dev_in, dev_out, CLIMG_ORIGIN, CLIMG_ORIGIN,
                                           region);
     }
-    return _yiyin_render_blur_cl(self, piece, dev_in, dev_out, roi_in, roi_out, d);
+    return _framing_render_blur_cl(self, piece, dev_in, dev_out, roi_in, roi_out, d);
   }
 
   dt_iop_border_positions_t binfo;
@@ -2817,19 +2819,19 @@ error:
 void init_global(dt_iop_module_so_t *self)
 {
   const int program = 2;  // basic.cl from programs.conf
-  // yiyin.cl sits at the far end of programs.conf: a fork-only kernel takes a
+  // framing.cl sits at the far end of programs.conf: a fork-only kernel takes a
   // slot above the upstream sequence so upstream additions at the tail cannot
   // collide with it
-  const int program_f = 200; // yiyin.cl from programs.conf (blur/film legs)
+  const int program_f = 200; // framing.cl from programs.conf (blur/film legs)
 
   dt_iop_borders_global_data_t *gd = malloc(sizeof(dt_iop_borders_global_data_t));
   self->data = gd;
   gd->kernel_borders_fill = dt_opencl_create_kernel(program, "borders_fill");
-  gd->kernel_yiyin_composite = dt_opencl_create_kernel(program_f, "yiyin_composite");
-  gd->kernel_yiyin_shadow_sdf = dt_opencl_create_kernel(program_f, "yiyin_shadow_sdf");
-  gd->kernel_yiyin_downsample = dt_opencl_create_kernel(program_f, "yiyin_downsample");
-  gd->kernel_yiyin_film_composite = dt_opencl_create_kernel(program_f, "yiyin_film_composite");
-  gd->kernel_yiyin_text_over = dt_opencl_create_kernel(program_f, "yiyin_text_over");
+  gd->kernel_framing_composite = dt_opencl_create_kernel(program_f, "framing_blur_composite");
+  gd->kernel_framing_shadow_sdf = dt_opencl_create_kernel(program_f, "framing_shadow_sdf");
+  gd->kernel_framing_downsample = dt_opencl_create_kernel(program_f, "framing_downsample");
+  gd->kernel_framing_film_composite = dt_opencl_create_kernel(program_f, "framing_film_composite");
+  gd->kernel_framing_text_over = dt_opencl_create_kernel(program_f, "framing_text_over");
 }
 
 
@@ -2837,11 +2839,11 @@ void cleanup_global(dt_iop_module_so_t *self)
 {
   dt_iop_borders_global_data_t *gd = self->data;
   dt_opencl_free_kernel(gd->kernel_borders_fill);
-  dt_opencl_free_kernel(gd->kernel_yiyin_composite);
-  dt_opencl_free_kernel(gd->kernel_yiyin_shadow_sdf);
-  dt_opencl_free_kernel(gd->kernel_yiyin_downsample);
-  dt_opencl_free_kernel(gd->kernel_yiyin_film_composite);
-  dt_opencl_free_kernel(gd->kernel_yiyin_text_over);
+  dt_opencl_free_kernel(gd->kernel_framing_composite);
+  dt_opencl_free_kernel(gd->kernel_framing_shadow_sdf);
+  dt_opencl_free_kernel(gd->kernel_framing_downsample);
+  dt_opencl_free_kernel(gd->kernel_framing_film_composite);
+  dt_opencl_free_kernel(gd->kernel_framing_text_over);
   free(self->data);
   self->data = NULL;
 }
@@ -2881,7 +2883,7 @@ static void _seed_text_defaults(dt_iop_module_t *self)
 {
   dt_iop_borders_params_t *d = self->default_params;
 
-  d->text_rows = CLAMP(dt_conf_get_int("plugins/darkroom/borders/text_rows"), 0, YIYIN_MAX_ROWS);
+  d->text_rows = CLAMP(dt_conf_get_int("plugins/darkroom/borders/text_rows"), 0, FRAMING_MAX_ROWS);
   d->text_size1 = dt_conf_get_float("plugins/darkroom/borders/text_size1");
   d->text_size2 = dt_conf_get_float("plugins/darkroom/borders/text_size2");
   d->text_size3 = dt_conf_get_float("plugins/darkroom/borders/text_size3");
@@ -3393,7 +3395,7 @@ void gui_init(dt_iop_module_t *self)
 
   // ── the frame modes ──
   g->mode = dt_bauhaus_combobox_from_params(self, "mode");
-  gtk_widget_set_tooltip_text(g->mode, _("basic border, yiyin backdrop, or a film strip"));
+  gtk_widget_set_tooltip_text(g->mode, _("basic border, blur frame, or a film strip"));
   g_signal_connect_after(G_OBJECT(g->mode), "value-changed", G_CALLBACK(_mode_changed), self);
 
   g->backdrop = dt_bauhaus_combobox_from_params(self, "backdrop");

@@ -176,9 +176,9 @@ typedef struct dt_iop_borders_params_t
   char film_font[64];       /* film edge marking font, a PostScript name DEFAULT: "Sans Bold" */
   float film_caption_color[3]; /* film edge marking color $DEFAULT: 1.0 $DESCRIPTION: "film text color" */
   float text_size1;         /* info row 1 size as a share of the canvas width
-                               $MIN: 0.5 $MAX: 6.0 $DEFAULT: 1.8 $DESCRIPTION: "row 1 size" */
+                               $MIN: 0.5 $MAX: 6.0 $DEFAULT: 2.2 $DESCRIPTION: "row 1 size" */
   float text_size2;         /* info row 2 size as a share of the canvas width
-                               $MIN: 0.5 $MAX: 6.0 $DEFAULT: 1.8 $DESCRIPTION: "row 2 size" */
+                               $MIN: 0.5 $MAX: 6.0 $DEFAULT: 2.2 $DESCRIPTION: "row 2 size" */
   float text_size3;         /* info row 3 size as a share of the canvas width
                                $MIN: 0.5 $MAX: 6.0 $DEFAULT: 2.2 $DESCRIPTION: "row 3 size" */
   float text_opacity;       /* info text opacity
@@ -226,6 +226,7 @@ typedef struct dt_iop_borders_gui_data_t
   GtkWidget *text_size2;
   GtkWidget *text_size3;
   GtkWidget *text_opacity;
+  dt_gui_collapsible_section_t text_section;
   GtkWidget *film_band;
   GtkWidget *film_caption;
   GtkWidget *film_font;
@@ -968,28 +969,71 @@ static char *_yiyin_expand_pattern(const char *pattern, const dt_image_t *img)
 // Nothing here may exceed it, however long the pattern text gets.
 #define YIYIN_TEXT_MAX_DIM 16000
 
-// the pango layout for one text row; metrics and render MUST share it, or
-// the measured row and the rendered bitmap drift apart by a pixel and the
-// canvas reserved for the text misses it
+// a generic family ("Sans", "Sans Bold", "Serif", "Monospace") is Pango's own
+// notation: the generic name plus optional style words. CoreText has no such
+// aliases and answers any name it cannot find with plain Helvetica, which
+// silently dropped the "Bold" in the default -- "Sans Bold" rendered as
+// regular Helvetica on macOS while Pango makes it bold everywhere else.
+static gboolean _yiyin_is_generic_family(const char *name)
+{
+  static const char *const generics[] =
+    { "sans", "sans-serif", "sansserif", "serif", "monospace", "system-ui" };
+  if(!name || !*name) return TRUE; // the built-in default, "Sans Bold"
+  char first[16];
+  size_t n = 0;
+  while(name[n] && name[n] != ' ' && name[n] != '\t' && name[n] != '-'
+        && n < sizeof(first) - 1)
+  {
+    first[n] = g_ascii_tolower(name[n]);
+    n++;
+  }
+  first[n] = '\0';
+  for(size_t i = 0; i < G_N_ELEMENTS(generics); i++)
+    if(!strcmp(first, generics[i])) return TRUE;
+  return FALSE;
+}
+
 // resolve a font the way code editors do: by PostScript name. On macOS the
 // name goes through CoreText, which knows the system fonts by their PS
 // identifiers ("STHeitiSC-Light", "KaitiSC-Regular", "PingFangSC-Semibold",
 // ...), and the family plus weight traits come back out as a Pango
-// description. Without CoreText the name is handed to Pango verbatim.
+// description. Generic families and every non-Apple build are handed to Pango
+// verbatim, which is the only side that understands them.
 static void _yiyin_resolve_font(const char *name, char *out, const int out_len)
 {
   snprintf(out, out_len, "%s", (name && *name) ? name : "Sans Bold");
+  if(_yiyin_is_generic_family(name)) return;
 #ifdef __APPLE__
-  CFStringRef ps = CFStringCreateWithCString(kCFAllocatorDefault, out, kCFStringEncodingUTF8);
-  CTFontRef font = CTFontCreateWithName(ps, 12.0, NULL);
-  CFRelease(ps);
+  // CoreText takes a family or a PostScript name, never a Pango description,
+  // and answers anything it cannot find with plain Helvetica. The font chooser
+  // hands out descriptions ("AI Bayan Bold", "Helvetica Neue Bold Italic"), so
+  // trust CoreText only when its PostScript name is exactly what was asked for;
+  // otherwise the string goes to Pango untouched, which does parse styles.
+  CFStringRef req = CFStringCreateWithCString(kCFAllocatorDefault, out, kCFStringEncodingUTF8);
+  CTFontRef font = CTFontCreateWithName(req, 12.0, NULL);
+
+  CFStringRef ps_ref = CTFontCopyPostScriptName(font);
+  char ps[128] = "";
+  const Boolean got_ps = CFStringGetCString(ps_ref, ps, sizeof(ps), kCFStringEncodingUTF8);
+  CFRelease(ps_ref);
+  if(!got_ps || g_ascii_strcasecmp(ps, out) != 0)
+  {
+    CFRelease(req);
+    CFRelease(font);
+    return;
+  }
 
   CFStringRef fam_ref = CTFontCopyFamilyName(font);
   char family[128] = "";
   const Boolean got_fam = CFStringGetCString(fam_ref, family, sizeof(family),
                                              kCFStringEncodingUTF8);
   CFRelease(fam_ref);
-  if(!got_fam || !family[0]) { CFRelease(font); return; }
+  if(!got_fam || !family[0])
+  {
+    CFRelease(req);
+    CFRelease(font);
+    return;
+  }
 
   char style[24] = "";
   if(CTFontGetSymbolicTraits(font) & kCTFontTraitBold)
@@ -1009,11 +1053,15 @@ static void _yiyin_resolve_font(const char *name, char *out, const int out_len)
     else if(w >= 0.4f)  snprintf(style, sizeof(style), " Semibold");
     else if(w >= 0.15f) snprintf(style, sizeof(style), " Medium");
   }
+  CFRelease(req);
   CFRelease(font);
   snprintf(out, out_len, "%s%s", family, style);
 #endif
 }
 
+// the pango layout for one text row; metrics and render MUST share it, or the
+// measured row and the rendered bitmap drift apart by a pixel and the canvas
+// reserved for the text misses it
 static PangoLayout *_yiyin_text_layout_new(const char *text, const double size_px,
                                            const char *fontdesc,
                                            PangoContext **ctx_out,
@@ -2821,6 +2869,33 @@ void cleanup_pipe(dt_iop_module_t *self,
   piece->data = NULL;
 }
 
+// the picture-info block is a set-once thing, so its defaults live on the
+// preferences page (prefs > processing > framing module). They are read here,
+// at instance creation and on a reset: an edit that is already in a history
+// keeps the values it was made with, which is why the block also stays in the
+// module for per-image tweaks.
+static void _seed_text_defaults(dt_iop_module_t *self)
+{
+  dt_iop_borders_params_t *d = self->default_params;
+
+  d->text_rows = CLAMP(dt_conf_get_int("plugins/darkroom/borders/text_rows"), 0, YIYIN_MAX_ROWS);
+  d->text_size1 = dt_conf_get_float("plugins/darkroom/borders/text_size1");
+  d->text_size2 = dt_conf_get_float("plugins/darkroom/borders/text_size2");
+  d->text_size3 = dt_conf_get_float("plugins/darkroom/borders/text_size3");
+  d->text_opacity = dt_conf_get_float("plugins/darkroom/borders/text_opacity");
+
+  // each getter may invalidate the previous pointer, so copy one at a time;
+  // an empty preference keeps the built-in pattern rather than printing nothing
+  const char *v = dt_conf_get_string_const("plugins/darkroom/borders/text_font");
+  if(v && *v) g_strlcpy(d->text_font, v, sizeof(d->text_font));
+  v = dt_conf_get_string_const("plugins/darkroom/borders/text_model");
+  if(v) g_strlcpy(d->text_model, v, sizeof(d->text_model));
+  v = dt_conf_get_string_const("plugins/darkroom/borders/text_lens");
+  if(v) g_strlcpy(d->text_lens, v, sizeof(d->text_lens));
+  v = dt_conf_get_string_const("plugins/darkroom/borders/text_params");
+  if(v) g_strlcpy(d->text_params, v, sizeof(d->text_params));
+}
+
 void init(dt_iop_module_t *self)
 {
   dt_iop_default_init(self);
@@ -2836,12 +2911,20 @@ void init(dt_iop_module_t *self)
   g_strlcpy(d->film_caption, "KODAK PORTRA 400", sizeof(d->film_caption));
   g_strlcpy(d->film_font, "Sans Bold", sizeof(d->film_font));
   d->film_caption_color[0] = d->film_caption_color[1] = d->film_caption_color[2] = 1.0f;
-  d->text_size1 = 1.8f;
-  d->text_size2 = 1.8f;
+  d->text_size1 = 2.2f;
+  d->text_size2 = 2.2f;
   d->text_size3 = 2.2f;
   d->text_opacity = 90.0f;
   d->blur_amount = 10.0f;
   d->mini_top_bottom_margin = 10.0f;
+
+  _seed_text_defaults(self);
+}
+
+// picks up a preferences change for the next instance without a restart
+void reload_defaults(dt_iop_module_t *self)
+{
+  _seed_text_defaults(self);
 }
 
 void init_presets(dt_iop_module_so_t *self)
@@ -2880,8 +2963,8 @@ void init_presets(dt_iop_module_so_t *self)
         .text_rows = 3,
         .text_lens = "{Lens}",
         .text_font = "Sans Bold",
-        .text_size1 = 1.8f,
-        .text_size2 = 1.8f,
+        .text_size1 = 2.2f,
+        .text_size2 = 2.2f,
         .text_size3 = 2.2f,
         .text_opacity = 90.0f,
         .film_font = "Sans Bold",
@@ -3027,6 +3110,10 @@ static void _mode_showhide(dt_iop_module_t *self)
   gtk_widget_set_visible(g->landscape_output, blur);
   gtk_widget_set_visible(g->corner_radius, blur);
   gtk_widget_set_visible(g->shadow, blur);
+  // the section owns its header: hide the whole block, not just the widgets,
+  // so basic and film modes never show an empty "picture info" strip
+  if(g->text_section.expander)
+    gtk_widget_set_visible(g->text_section.expander, blur);
   gtk_widget_set_visible(g->text_show, blur);
   const gboolean rows = blur && p->text_show;
   gtk_widget_set_visible(g->text_rows, rows);
@@ -3073,13 +3160,30 @@ static void _text_entry_activate(GtkEntry *entry, dt_iop_module_t *self)
     g_strlcpy(p->text_lens, t ? t : "", sizeof(p->text_lens));
   else if(entry == GTK_ENTRY(g->text_params))
     g_strlcpy(p->text_params, t ? t : "", sizeof(p->text_params));
-  else if(entry == GTK_ENTRY(g->text_font))
-    g_strlcpy(p->text_font, t ? t : "", sizeof(p->text_font));
   else if(entry == GTK_ENTRY(g->film_caption))
     g_strlcpy(p->film_caption, t ? t : "", sizeof(p->film_caption));
   else if(entry == GTK_ENTRY(g->film_font))
     g_strlcpy(p->film_font, t ? t : "", sizeof(p->film_font));
   dt_dev_add_history_item(darktable.develop, self, TRUE);
+}
+
+// the font chooser delivers a Pango description ("Family Style"); store it in
+// the params and remember it as the default for new instances, the way the
+// watermark module does, so the preferences page never drifts from what the
+// last pick actually was
+static void _text_font_set(GtkFontButton *button, dt_iop_module_t *self)
+{
+  DT_GUARD_GUI_UPDATE();
+  dt_iop_borders_params_t *p = self->params;
+
+  gchar *font = gtk_font_chooser_get_font(GTK_FONT_CHOOSER(button));
+  if(font && *font)
+  {
+    g_strlcpy(p->text_font, font, sizeof(p->text_font));
+    dt_conf_set_string("plugins/darkroom/borders/text_font", p->text_font);
+    dt_dev_add_history_item(darktable.develop, self, TRUE);
+  }
+  g_free(font);
 }
 
 static gboolean _text_entry_focus_out(GtkWidget *widget, GdkEventFocus *event,
@@ -3260,7 +3364,7 @@ void gui_update(dt_iop_module_t *self)
   gtk_entry_set_text(GTK_ENTRY(g->text_lens), p->text_lens);
   gtk_entry_set_text(GTK_ENTRY(g->text_params), p->text_params);
   dt_bauhaus_slider_set(g->text_rows, p->text_rows);
-  gtk_entry_set_text(GTK_ENTRY(g->text_font), p->text_font);
+  gtk_font_chooser_set_font(GTK_FONT_CHOOSER(g->text_font), p->text_font);
   dt_bauhaus_slider_set(g->text_size1, p->text_size1);
   dt_bauhaus_slider_set(g->text_size2, p->text_size2);
   dt_bauhaus_slider_set(g->text_size3, p->text_size3);
@@ -3274,6 +3378,7 @@ void gui_update(dt_iop_module_t *self)
                             .alpha = 1.0 };
   gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(g->film_colorpick), &filmc);
   dt_bauhaus_slider_set(g->film_caption_size, p->film_caption_size);
+  dt_gui_update_collapsible_section(&g->text_section);
   _mode_showhide(self);
 }
 
@@ -3331,11 +3436,24 @@ void gui_init(dt_iop_module_t *self)
   dt_bauhaus_slider_set_format(g->shadow, "%");
   gtk_widget_set_tooltip_text(g->shadow, _("drop shadow width as a share of the picture height"));
 
-  g->text_show = dt_bauhaus_toggle_from_params(self, "text_show");
+  // ── the picture info rows (blur mode only) ──
+  // the block is collapsed by default: the frame geometry stays in view and
+  // the info text is a set-once thing. The values for a NEW instance come
+  // from the preferences page (see _seed_text_defaults), the ones already in
+  // an edit are kept in its history
+  const gchar *text_section_name = NC_("section", "picture info");
+  dt_gui_new_collapsible_section(&g->text_section,
+                                 "plugins/darkroom/borders/expand_text",
+                                 Q_(text_section_name),
+                                 GTK_BOX(self->widget), DT_ACTION(self));
+  dt_iop_module_t *text
+    = DT_IOP_SECTION_FOR_PARAMS(self, text_section_name, g->text_section.container);
+
+  g->text_show = dt_bauhaus_toggle_from_params(text, "text_show");
   gtk_widget_set_tooltip_text(g->text_show, _("print the picture info below the picture"));
   g_signal_connect_after(G_OBJECT(g->text_show), "value-changed",
                          G_CALLBACK(_showhide_changed), self);
-  g->text_rows = dt_bauhaus_slider_from_params(self, "text_rows");
+  g->text_rows = dt_bauhaus_slider_from_params(text, "text_rows");
   dt_bauhaus_slider_set_step(g->text_rows, 1.0);
   dt_bauhaus_slider_set_digits(g->text_rows, 0);
   gtk_widget_set_tooltip_text(g->text_rows, _("how many of the three info rows to print"));
@@ -3348,7 +3466,7 @@ void gui_init(dt_iop_module_t *self)
   g_signal_connect(G_OBJECT(g->text_model), "activate", G_CALLBACK(_text_entry_activate), self);
   g_signal_connect(G_OBJECT(g->text_model), "focus-out-event",
                    G_CALLBACK(_text_entry_focus_out), self);
-  dt_gui_box_add(self->widget, g->text_model);
+  dt_gui_box_add(g->text_section.container, g->text_model);
 
   g->text_lens = gtk_entry_new();
   gtk_entry_set_placeholder_text(GTK_ENTRY(g->text_lens), "{Lens}");
@@ -3356,40 +3474,61 @@ void gui_init(dt_iop_module_t *self)
   g_signal_connect(G_OBJECT(g->text_lens), "activate", G_CALLBACK(_text_entry_activate), self);
   g_signal_connect(G_OBJECT(g->text_lens), "focus-out-event",
                    G_CALLBACK(_text_entry_focus_out), self);
-  dt_gui_box_add(self->widget, g->text_lens);
+  dt_gui_box_add(g->text_section.container, g->text_lens);
 
   g->text_params = gtk_entry_new();
   gtk_entry_set_placeholder_text(GTK_ENTRY(g->text_params),
                                  "{FocalLengthIn35mmFormat}mm f/{FNumber} {ExposureTime}s ISO{ISO}");
-  gtk_widget_set_tooltip_text(g->text_params, _("the second info row, same placeholders -- commit with Enter"));
+  gtk_widget_set_tooltip_text(g->text_params, _("the third info row, same placeholders -- commit with Enter"));
   g_signal_connect(G_OBJECT(g->text_params), "activate", G_CALLBACK(_text_entry_activate), self);
   g_signal_connect(G_OBJECT(g->text_params), "focus-out-event",
                    G_CALLBACK(_text_entry_focus_out), self);
-  dt_gui_box_add(self->widget, g->text_params);
+  dt_gui_box_add(g->text_section.container, g->text_params);
 
-  g->text_size1 = dt_bauhaus_slider_from_params(self, "text_size1");
+  // the row sizes are stored as the percentage itself (1.8 is 1.8% of the
+  // canvas width), but set_format("%") drives bauhaus's factor to 100 for any
+  // slider whose maximum is below 10 -- a rule meant for 0..1 fractions -- and
+  // that printed 1.8 as "180%". Keep the factor at 1 and restore the two
+  // decimals set_format drops, so the slider reads the number the renderer uses
+  g->text_size1 = dt_bauhaus_slider_from_params(text, "text_size1");
   dt_bauhaus_slider_set_format(g->text_size1, "%");
+  dt_bauhaus_slider_set_factor(g->text_size1, 1.0f);
+  dt_bauhaus_slider_set_digits(g->text_size1, 2);
   gtk_widget_set_tooltip_text(g->text_size1, _("info row 1 (make and model) size as a share of the canvas width"));
 
-  g->text_size2 = dt_bauhaus_slider_from_params(self, "text_size2");
+  g->text_size2 = dt_bauhaus_slider_from_params(text, "text_size2");
   dt_bauhaus_slider_set_format(g->text_size2, "%");
+  dt_bauhaus_slider_set_factor(g->text_size2, 1.0f);
+  dt_bauhaus_slider_set_digits(g->text_size2, 2);
   gtk_widget_set_tooltip_text(g->text_size2, _("info row 2 (lens) size as a share of the canvas width"));
 
-  g->text_size3 = dt_bauhaus_slider_from_params(self, "text_size3");
+  g->text_size3 = dt_bauhaus_slider_from_params(text, "text_size3");
   dt_bauhaus_slider_set_format(g->text_size3, "%");
+  dt_bauhaus_slider_set_factor(g->text_size3, 1.0f);
+  dt_bauhaus_slider_set_digits(g->text_size3, 2);
   gtk_widget_set_tooltip_text(g->text_size3, _("info row 3 (exposure) size as a share of the canvas width"));
 
-  g->text_opacity = dt_bauhaus_slider_from_params(self, "text_opacity");
+  g->text_opacity = dt_bauhaus_slider_from_params(text, "text_opacity");
   dt_bauhaus_slider_set_format(g->text_opacity, "%");
   gtk_widget_set_tooltip_text(g->text_opacity, _("the opacity of all three info rows"));
 
-  g->text_font = gtk_entry_new_with_buffer(gtk_entry_buffer_new("", -1));
-  gtk_entry_set_placeholder_text(GTK_ENTRY(g->text_font), "Sans Bold");
-  gtk_widget_set_tooltip_text(g->text_font, _("the font for all three info rows, a Pango font description -- try \"Heiti SC\" (黑体), \"Kaiti SC\" (楷体), \"Songti SC\" (宋体), \"PingFang SC\" -- commit with Enter"));
-  g_signal_connect(G_OBJECT(g->text_font), "activate", G_CALLBACK(_text_entry_activate), self);
-  g_signal_connect(G_OBJECT(g->text_font), "focus-out-event",
-                   G_CALLBACK(_text_entry_focus_out), self);
-  dt_gui_box_add(self->widget, g->text_font);
+  // the font is picked from the system list instead of typing a description;
+  // the pick is also stored as the default for new instances (as the
+  // watermark module does), so the preferences page and this button agree
+  g->text_font = gtk_font_button_new_with_font(p->text_font[0] ? p->text_font : "Sans Bold");
+  gtk_font_button_set_show_size(GTK_FONT_BUTTON(g->text_font), FALSE);
+  gtk_font_button_set_use_font(GTK_FONT_BUTTON(g->text_font), FALSE);
+  // GTK's chooser previews pango_language_get_sample_string(), which is a CJK
+  // sentence on a Chinese UI and renders as missing-glyph boxes in every Latin
+  // font. The rows print EXIF text, so preview that instead.
+  gtk_font_chooser_set_preview_text(GTK_FONT_CHOOSER(g->text_font), "AaBbCc 0123456789");
+  GtkWidget *font_label
+    = dt_gui_container_first_child(GTK_CONTAINER(gtk_bin_get_child(GTK_BIN(g->text_font))));
+  if(GTK_IS_LABEL(font_label))
+    gtk_label_set_ellipsize(GTK_LABEL(font_label), PANGO_ELLIPSIZE_MIDDLE);
+  gtk_widget_set_tooltip_text(g->text_font, _("the font for all three info rows"));
+  g_signal_connect(G_OBJECT(g->text_font), "font-set", G_CALLBACK(_text_font_set), self);
+  dt_gui_box_add(g->text_section.container, g->text_font);
 
   g->film_band = dt_bauhaus_slider_from_params(self, "film_band");
   dt_bauhaus_slider_set_format(g->film_band, "%");

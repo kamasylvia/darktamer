@@ -573,7 +573,9 @@ gboolean mcp_tools_targets_open(const char *name, JsonObject *args)
   if(!name) return FALSE;
 
   // these drive the GUI itself and always take the GUI thread
-  if(!strcmp(name, "get_open_image") || !strcmp(name, "open_image")) return TRUE;
+  if(!strcmp(name, "get_open_image") || !strcmp(name, "open_image")
+     || !strcmp(name, "get_collection") || !strcmp(name, "set_collection")
+     || !strcmp(name, "get_selected_images")) return TRUE;
 
   // apply_stack defaults to the open image when no target is given
   if(!strcmp(name, "apply_stack"))
@@ -620,6 +622,53 @@ gboolean mcp_tools_targets_open(const char *name, JsonObject *args)
 }
 
 // ---------------------------------------------------------------------------
+// lighttable focus: collection + selection
+// ---------------------------------------------------------------------------
+
+static JsonNode *_tool_get_collection(JsonObject *args)
+{
+  (void)args;
+  char *err = NULL;
+  char *json = dt_bridge_get_collection_json(&err);
+  if(!json)
+  { JsonNode *r = _text_result(err ? err : "error", TRUE); g_free(err); return r; }
+  JsonNode *r = _text_result(json, FALSE);
+  g_free(json);
+  return r;
+}
+
+static JsonNode *_tool_set_collection(JsonObject *args)
+{
+  JsonArray *rules = _arg_array(args, "rules");
+  if(!rules)
+    return _text_result("set_collection: requires a non-empty 'rules' array"
+                        " of {property, mode?, string}; see get_collection"
+                        " for the current rules and the property names", TRUE);
+  char *err = NULL;
+  if(!dt_bridge_set_collection(rules, &err))
+  { JsonNode *r = _text_result(err ? err : "error", TRUE); g_free(err); return r; }
+  // report what the lighttable shows now, so the caller can confirm the
+  // focus actually moved
+  char *json = dt_bridge_get_collection_json(&err);
+  if(!json)
+  { JsonNode *r = _text_result("{\"ok\":true}", FALSE); g_free(err); return r; }
+  JsonNode *r = _text_result(json, FALSE);
+  g_free(json);
+  return r;
+}
+
+static JsonNode *_tool_get_selected_images(JsonObject *args)
+{
+  char *err = NULL;
+  char *json = dt_bridge_get_selected_images_json(_arg_int(args, "limit", 1000), &err);
+  if(!json)
+  { JsonNode *r = _text_result(err ? err : "error", TRUE); g_free(err); return r; }
+  JsonNode *r = _text_result(json, FALSE);
+  g_free(json);
+  return r;
+}
+
+// ---------------------------------------------------------------------------
 // registry
 // ---------------------------------------------------------------------------
 
@@ -658,6 +707,9 @@ static const mcp_handler_t _handlers[] = {
   { "get_open_image",   _tool_get_open_image },
   { "open_image",       _tool_open_image },
   { "apply_stack",      _tool_apply_stack },
+  { "get_collection",   _tool_get_collection },
+  { "set_collection",   _tool_set_collection },
+  { "get_selected_images", _tool_get_selected_images },
 };
 static const size_t _n_handlers = sizeof(_handlers) / sizeof(_handlers[0]);
 

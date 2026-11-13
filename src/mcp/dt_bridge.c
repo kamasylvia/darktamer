@@ -29,6 +29,8 @@
 #include "common/datetime.h"
 #include "common/colorlabels.h"
 #include "common/ratings.h"
+#include "common/selection.h"
+#include "common/collection.h"
 #include "views/view.h"
 #include "common/introspection.h"
 #include "common/iop_order.h"
@@ -2998,4 +3000,239 @@ gboolean dt_bridge_gui_open_image(const char *path, int imgid_in, char **err)
     return FALSE;
   }
   return TRUE;
+}
+
+// ---------------------------------------------------------------------------
+// collection + selection (the lighttable's focus, read and steered live)
+// ---------------------------------------------------------------------------
+
+// readable names for the collection properties an agent may target; NULL
+// means the property has no agent-facing name and is reported numerically
+typedef struct { int prop; const char *name; } _prop_name_t;
+
+// read a string member from a rules entry; NULL when absent or not a string
+static const char *_obj_string(JsonObject *o, const char *key)
+{
+  if(!o || !json_object_has_member(o, key)) return NULL;
+  JsonNode *n = json_object_get_member(o, key);
+  if(!JSON_NODE_HOLDS_VALUE(n) || json_node_get_value_type(n) != G_TYPE_STRING)
+    return NULL;
+  return json_node_get_string(n);
+}
+static const _prop_name_t _prop_names[] = {
+  { DT_COLLECTION_PROP_FILMROLL, "filmroll" },
+  { DT_COLLECTION_PROP_FOLDERS, "folders" },
+  { DT_COLLECTION_PROP_FILENAME, "filename" },
+  { DT_COLLECTION_PROP_CAMERA, "camera" },
+  { DT_COLLECTION_PROP_LENS, "lens" },
+  { DT_COLLECTION_PROP_APERTURE, "aperture" },
+  { DT_COLLECTION_PROP_EXPOSURE, "exposure" },
+  { DT_COLLECTION_PROP_FOCAL_LENGTH, "focal_length" },
+  { DT_COLLECTION_PROP_ISO, "iso" },
+  { DT_COLLECTION_PROP_DAY, "day" },
+  { DT_COLLECTION_PROP_TIME, "time" },
+  { DT_COLLECTION_PROP_IMPORT_TIMESTAMP, "import_timestamp" },
+  { DT_COLLECTION_PROP_CHANGE_TIMESTAMP, "change_timestamp" },
+  { DT_COLLECTION_PROP_EXPORT_TIMESTAMP, "export_timestamp" },
+  { DT_COLLECTION_PROP_PRINT_TIMESTAMP, "print_timestamp" },
+  { DT_COLLECTION_PROP_GEOTAGGING, "geotagging" },
+  { DT_COLLECTION_PROP_ASPECT_RATIO, "aspect_ratio" },
+  { DT_COLLECTION_PROP_TAG, "tag" },
+  { DT_COLLECTION_PROP_COLORLABEL, "colorlabel" },
+  { DT_COLLECTION_PROP_METADATA, "metadata" },
+  { DT_COLLECTION_PROP_LOCAL_COPY, "local_copy" },
+  { DT_COLLECTION_PROP_HISTORY, "history" },
+  { DT_COLLECTION_PROP_MODULE, "module" },
+  { DT_COLLECTION_PROP_ORDER, "order" },
+  { DT_COLLECTION_PROP_RATING_RANGE, "rating_range" },
+  { DT_COLLECTION_PROP_TEXTSEARCH, "textsearch" },
+  { DT_COLLECTION_PROP_RATING, "rating" },
+  { DT_COLLECTION_PROP_WHITEBALANCE, "whitebalance" },
+  { DT_COLLECTION_PROP_FLASH, "flash" },
+  { DT_COLLECTION_PROP_EXPOSURE_PROGRAM, "exposure_program" },
+  { DT_COLLECTION_PROP_METERING_MODE, "metering_mode" },
+  { DT_COLLECTION_PROP_GROUP_ID, "group_id" },
+  { DT_COLLECTION_PROP_EXPOSURE_BIAS, "exposure_bias" },
+  { DT_COLLECTION_PROP_DUPLICATES, "duplicates" },
+  { DT_COLLECTION_PROP_MONTH, "month" },
+  { DT_COLLECTION_PROP_DIMENSIONS, "dimensions" },
+};
+
+static const char *_prop_to_name(int prop)
+{
+  for(size_t i = 0; i < sizeof(_prop_names) / sizeof(_prop_names[0]); i++)
+    if(_prop_names[i].prop == prop) return _prop_names[i].name;
+  return NULL;
+}
+
+static int _name_to_prop(const char *name)
+{
+  if(!name) return -1;
+  for(size_t i = 0; i < sizeof(_prop_names) / sizeof(_prop_names[0]); i++)
+    if(!g_ascii_strcasecmp(_prop_names[i].name, name)) return _prop_names[i].prop;
+  // numeric form too: get_collection reports unknown properties as numbers
+  // and set_collection should accept its own output back
+  if(g_str_has_prefix(name, "property_"))
+    return atoi(name + strlen("property_"));
+  return -1;
+}
+
+/** JSON { rules:[{property, mode, string}], count, view } of what the
+    lighttable is currently showing; headless this describes the server's
+    own collection */
+char *dt_bridge_get_collection_json(char **err)
+{
+  if(!darktable.collection)
+  {
+    _seterr(err, "no collection state");
+    return NULL;
+  }
+  JsonBuilder *b = json_builder_new();
+  json_builder_begin_object(b);
+
+  json_builder_set_member_name(b, "rules");
+  json_builder_begin_array(b);
+  const int n_rules = CLAMP(dt_conf_get_int("plugins/lighttable/collect/num_rules"),
+                            1, 10);
+  char confname[200];
+  for(int i = 0; i < n_rules; i++)
+  {
+    snprintf(confname, sizeof(confname), "plugins/lighttable/collect/item%1d", i);
+    const int item = dt_conf_get_int(confname);
+    snprintf(confname, sizeof(confname), "plugins/lighttable/collect/mode%1d", i);
+    const int mode = dt_conf_get_int(confname);
+    snprintf(confname, sizeof(confname), "plugins/lighttable/collect/string%1d", i);
+    const char *string = dt_conf_get_string_const(confname);
+
+    json_builder_begin_object(b);
+    json_builder_set_member_name(b, "property");
+    gchar *pname_fallback = NULL;
+    const char *pname = _prop_to_name(item);
+    if(!pname) pname = pname_fallback = g_strdup_printf("property_%d", item);
+    json_builder_add_string_value(b, pname);
+    g_free(pname_fallback);
+    json_builder_set_member_name(b, "mode");
+    json_builder_add_string_value(b, mode == 1 ? "or" : mode == 2 ? "and_not" : "and");
+    json_builder_set_member_name(b, "string");
+    json_builder_add_string_value(b, string ? string : "");
+    json_builder_end_object(b);
+  }
+  json_builder_end_array(b);
+
+  json_builder_set_member_name(b, "count");
+  json_builder_add_int_value(b, (gint64)dt_collection_get_count(darktable.collection));
+  if(darktable.view_manager)
+  {
+    const dt_view_t *view = dt_view_manager_get_current_view(darktable.view_manager);
+    json_builder_set_member_name(b, "view");
+    json_builder_add_string_value(b, view ? view->module_name : "");
+  }
+  json_builder_end_object(b);
+  char *out = _builder_to_string(b);
+  g_object_unref(b);
+  return out;
+}
+
+/** steer the lighttable's collection to the given rules; the collect
+    module and every view follow through DT_SIGNAL_COLLECTION_CHANGED.
+    does not touch the library, so --read-only lets it through */
+gboolean dt_bridge_set_collection(void *rules_jsonarray, char **err)
+{
+  JsonArray *rules = (JsonArray *)rules_jsonarray;
+  if(!rules || json_array_get_length(rules) < 1)
+  {
+    _seterr(err, "'rules' must be a non-empty array of"
+                 " {property, mode?, string}");
+    return FALSE;
+  }
+  const guint n = json_array_get_length(rules);
+  if(n > 10)
+  {
+    _seterr(err, "at most 10 collection rules");
+    return FALSE;
+  }
+
+  char confname[200];
+  for(guint i = 0; i < n; i++)
+  {
+    JsonNode *en = json_array_get_element(rules, i);
+    if(!JSON_NODE_HOLDS_OBJECT(en))
+    {
+      _seterr(err, "rules[%u] is not an object", i);
+      return FALSE;
+    }
+    JsonObject *r = json_node_get_object(en);
+    const int prop = _name_to_prop(_obj_string(r, "property"));
+    if(prop < 0)
+    {
+      _seterr(err, "rules[%u]: unknown property '%s' (see get_collection)",
+              i, _obj_string(r, "property") ?: "(missing)");
+      return FALSE;
+    }
+    const char *mode = _obj_string(r, "mode");
+    const int mode_v = mode && !g_ascii_strcasecmp(mode, "or") ? 1
+                     : mode && !g_ascii_strcasecmp(mode, "and_not") ? 2 : 0;
+    const char *string = _obj_string(r, "string");
+
+    snprintf(confname, sizeof(confname), "plugins/lighttable/collect/item%1u", i);
+    dt_conf_set_int(confname, prop);
+    snprintf(confname, sizeof(confname), "plugins/lighttable/collect/mode%1u", i);
+    dt_conf_set_int(confname, mode_v);
+    snprintf(confname, sizeof(confname), "plugins/lighttable/collect/string%1u", i);
+    dt_conf_set_string(confname, string ? string : "");
+  }
+  snprintf(confname, sizeof(confname), "plugins/lighttable/collect/num_rules");
+  dt_conf_set_int(confname, (int)n);
+
+  // update_query is the UI's own entry point: it rebuilds the query and
+  // raises DT_SIGNAL_COLLECTION_CHANGED, so the collect module rebuilds
+  // and every view reloads. it does not touch the count cache, so that is
+  // invalidated here, exactly like collection.c's own recount callbacks do
+  ((dt_collection_t *)darktable.collection)->count = UINT32_MAX;
+  ((dt_collection_t *)darktable.collection)->count_no_group = UINT32_MAX;
+  dt_collection_update_query(darktable.collection, DT_COLLECTION_CHANGE_RELOAD,
+                             DT_COLLECTION_PROP_UNDEF, NULL);
+  return TRUE;
+}
+
+/** JSON { imgids:[...], count, view } of the lighttable's selection; with
+    limit, imgids is cut while count stays whole */
+char *dt_bridge_get_selected_images_json(int limit, char **err)
+{
+  if(!darktable.selection)
+  {
+    _seterr(err, "no selection state");
+    return NULL;
+  }
+  GList *sel = dt_selection_get_list(darktable.selection, FALSE, FALSE);
+  const int count = g_list_length(sel);
+
+  JsonBuilder *b = json_builder_new();
+  json_builder_begin_object(b);
+  json_builder_set_member_name(b, "imgids");
+  json_builder_begin_array(b);
+  int i = 0;
+  for(GList *l = sel; l && (limit <= 0 || i < limit); l = g_list_next(l), i++)
+    json_builder_add_int_value(b, GPOINTER_TO_INT(l->data));
+  json_builder_end_array(b);
+  json_builder_set_member_name(b, "count");
+  json_builder_add_int_value(b, count);
+  json_builder_set_member_name(b, "shown");
+  json_builder_add_int_value(b, i);
+  if(count > i)
+  {
+    json_builder_set_member_name(b, "truncated");
+    json_builder_add_boolean_value(b, TRUE);
+  }
+  if(darktable.view_manager)
+  {
+    const dt_view_t *view = dt_view_manager_get_current_view(darktable.view_manager);
+    json_builder_set_member_name(b, "view");
+    json_builder_add_string_value(b, view ? view->module_name : "");
+  }
+  json_builder_end_object(b);
+  char *out = _builder_to_string(b);
+  g_object_unref(b);
+  g_list_free(sel);
+  return out;
 }

@@ -465,12 +465,9 @@ static void _mcp_gui_close_connection(void)
 // the agent side of the toggle: a ready stdio client configuration next to
 // this program, so "how do I connect" is a file on disk instead of prose in
 // a manual. the bridge sits beside the main binary
-static void _write_client_config(void)
-{
-  gchar configdir[PATH_MAX] = { 0 };
-  dt_loc_get_user_config_dir(configdir, sizeof(configdir));
-  if(!configdir[0]) return;
 
+gchar *dt_mcp_gui_bridge_path(void)
+{
   gchar bridge[PATH_MAX] = { 0 };
   if(darktable.restart_argv && darktable.restart_argv[0])
   {
@@ -484,7 +481,35 @@ static void _write_client_config(void)
     // PATH resolve it
     g_strlcpy(bridge, "darktable-mcp", sizeof(bridge));
   }
+  return g_strdup(bridge);
+}
 
+gchar *dt_mcp_gui_client_config_json(void)
+{
+  gchar *bridge = dt_mcp_gui_bridge_path();
+  const gchar *socket = S.path && S.path[0] ? S.path
+                                            : "the socket shown in the server log";
+  gchar *json = g_strdup_printf(
+    "{\n"
+    "  \"mcpServers\": {\n"
+    "    \"darktable\": {\n"
+    "      \"command\": \"%s\",\n"
+    "      \"args\": [\"--bridge\", \"--socket\", \"%s\"]\n"
+    "    }\n"
+    "  }\n"
+    "}",
+    bridge, socket);
+  g_free(bridge);
+  return json;
+}
+
+static void _write_client_config(void)
+{
+  gchar configdir[PATH_MAX] = { 0 };
+  dt_loc_get_user_config_dir(configdir, sizeof(configdir));
+  if(!configdir[0]) return;
+
+  gchar *bridge = dt_mcp_gui_bridge_path();
   gchar *path = g_build_filename(configdir, "mcp-client-config.json", NULL);
   gchar *json = g_strdup_printf(
     "{\n"
@@ -513,6 +538,7 @@ static void _write_client_config(void)
     dt_print(DT_DEBUG_CONTROL, "[mcp] client config written to %s", path);
   g_free(json);
   g_free(path);
+  g_free(bridge);
 }
 
 void dt_mcp_gui_server_start(const char *socket_override)

@@ -336,5 +336,44 @@
       "required": ["stack"],
       "additionalProperties": false
     }
+  },
+  {
+    "name": "get_collection",
+    "description": "Report the lighttable's current collection: the rules ({property, mode, string}) that define what the grid shows, the image count, and the view. Properties are named (filmroll, folders, tag, camera, ...). GUI mode reflects the running instance; headless describes the server's own collection.",
+    "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+  },
+  {
+    "name": "set_collection",
+    "description": "Steer the lighttable's collection to the given rules array: e.g. [{\"property\":\"filmroll\",\"string\":\"/path/to/dir\"}] focuses one directory, and mode joins rules (and, or, and_not). The collect module and the grid reload immediately; the image selection follows the new view. Does not touch the library, so --read-only lets it through. Reports the collection as set.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "property": { "type": "string", "description": "collection property name as get_collection reports (filmroll, folders, filename, camera, lens, tag, colorlabel, ...)" },
+              "mode": { "type": "string", "description": "how this rule combines with the previous: and (default), or, and_not", "enum": ["and", "or", "and_not"] },
+              "string": { "type": "string", "description": "rule text; for filmroll/folders a directory path, for tag a tag name, for rating the encoded form as get_collection reports" }
+            },
+            "required": ["property"]
+          }
+        }
+      },
+      "required": ["rules"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_selected_images",
+    "description": "Report the images currently selected in the lighttable (starred/checked frames): { imgids, count, shown, view }. imgids is cut at limit (default 1000) with truncated=true when more are selected. GUI mode reads the running instance.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "limit": { "description": "maximum imgids to list; 0 = no limit", "type": "integer" }
+      },
+      "additionalProperties": false
+    }
   }
 ]

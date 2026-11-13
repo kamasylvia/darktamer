@@ -146,3 +146,19 @@ gboolean dt_bridge_apply_stack_library(int imgid, void *stack_jsonarray,
 /** open an image in the GUI darkroom by imgid or catalog path; refuses to
     import anything new */
 gboolean dt_bridge_gui_open_image(const char *path, int imgid_in, char **err);
+
+/** JSON { rules:[{property, mode, string}], count, view } of what the
+    lighttable is currently showing (the collection's rules and image
+    count). works headless against the server's own collection */
+char *dt_bridge_get_collection_json(char **err);
+
+/** steer the lighttable's collection to the given rules array
+    ({property, mode?, string}); the collect module and every view follow
+    through DT_SIGNAL_COLLECTION_CHANGED. does not touch the library, so
+    --read-only lets it through */
+gboolean dt_bridge_set_collection(void *rules_jsonarray, char **err);
+
+/** JSON { imgids:[...], count, shown, view } of the lighttable's current
+    selection; with limit > 0, imgids is cut at limit while count stays
+    whole (truncated=true tells the caller) */
+char *dt_bridge_get_selected_images_json(int limit, char **err);

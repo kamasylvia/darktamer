@@ -333,6 +333,9 @@ GUI mode only — these no-op or report null from the headless server. See
 | `get_open_image` | – | `{imgid, path, view}` for what the darkroom shows; `imgid: null` when none |
 | `open_image` | `{imgid \| path}` | loads a catalog image into the darkroom; reports the resulting open state |
 | `apply_stack` | `{stack[], imgid?, input?, disable_tone_mappers?}` | applies stack entries; live on the open image, library write elsewhere; `{"ok":true,"imgid":N}` |
+| `get_collection` | – | the lighttable's current collection: `{rules:[{property, mode, string}], count, view}` |
+| `set_collection` | `{rules:[{property, mode?, string}]}` | steers the lighttable's focus (e.g. `filmroll` to one directory); collect module and grid reload immediately, image count follows; reports the collection as set |
+| `get_selected_images` | `{limit?}` | `{imgids, count, shown, view}` of the lighttable's selection; `truncated:true` when count > shown |
 
 ### Library (catalog)
 

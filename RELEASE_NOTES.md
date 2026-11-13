@@ -172,6 +172,16 @@ changes (where available).
   block collapses into a "picture info" section, and the font is picked
   from the system font list instead of being typed as a description.
 
+- The MCP server can now be served from the running GUI (`darktable
+  --mcp`, or the new "AI agent server" preference), so an agent's edits
+  to the image open in the darkroom show on the canvas immediately.
+  Clients connect through `darktable-mcp --bridge`. New tools:
+  `get_open_image`, `open_image`, and `apply_stack`, which applies a
+  module stack live on the open image and writes the library elsewhere.
+  Module string parameters (framing's info rows, fonts, film caption)
+  are now settable by name, and module listings carry display names and
+  aliases so the framing module can be found as "framing".
+
 - Added an interactive editing mode allowing users to correct a color
   by selecting it directly on the photo with the mouse wheel, just as
   was already possible with the "tone equalizer" module.

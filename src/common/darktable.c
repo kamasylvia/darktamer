@@ -125,6 +125,10 @@
 
 #include "dbus.h"
 
+#ifdef HAVE_MCP
+#include "mcp/mcp_gui_server.h"
+#endif
+
 #if defined(__SUNOS__)
 #include <sys/varargs.h>
 #endif
@@ -522,7 +526,14 @@ static int usage(const char *argv0)
 #endif
          "\n"
          "    If -d signal or -d all is specified, specify the signal action\n"
-         "    to debug using this option.\n");
+         "    to debug using this option.\n"
+         "\n"
+         "--mcp\n"
+         "    serve MCP tools for AI agents from this running instance over\n"
+         "    a unix socket (same as setting plugins/mcp/gui_server)\n"
+         "\n"
+         "--mcp-socket PATH\n"
+         "    socket path for --mcp, default $XDG_RUNTIME_DIR/darktable-mcp.sock\n");
 #ifdef _WIN32
   printf("\n\n");
   printf("Debug log and output will be written to this file:\n");
@@ -1234,6 +1245,8 @@ int dt_init(int argc,
   char *cachedir_from_command = NULL;
   gboolean print_paths = FALSE;
   gboolean print_paths_as_flags = FALSE;
+  gboolean mcp_from_command = FALSE;
+  char *mcp_socket_from_command = NULL;
 
   darktable.dump_pfm_module = NULL;
   darktable.dump_pfm_pipe = NULL;
@@ -1480,6 +1493,17 @@ int dt_init(int argc,
       else if(!strcmp(argv[k], "--tmpdir") && argc > k + 1)
       {
         tmpdir_from_command = argv[++k];
+        argv[k-1] = NULL;
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--mcp"))
+      {
+        mcp_from_command = TRUE;
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--mcp-socket") && argc > k + 1)
+      {
+        mcp_socket_from_command = argv[++k];
         argv[k-1] = NULL;
         argv[k] = NULL;
       }
@@ -2670,6 +2694,20 @@ int dt_init(int argc,
   // fire up a background job to perform sidecar writes
   dt_control_sidecar_synch_start();
 
+#ifdef HAVE_MCP
+  // the in-GUI MCP server. the flags just set the conf keys the start reads,
+  // so --mcp and plugins/mcp/gui_server end up in the same place
+  if(init_gui)
+  {
+    dt_print(DT_DEBUG_CONTROL, "[mcp] init hook: flag=%d socket=%s",
+             mcp_from_command, mcp_socket_from_command ? mcp_socket_from_command : "-");
+    if(mcp_from_command) dt_conf_set_bool("plugins/mcp/gui_server", TRUE);
+    if(mcp_socket_from_command)
+      dt_conf_set_string("plugins/mcp/gui_socket", mcp_socket_from_command);
+    dt_mcp_gui_server_start(NULL);
+  }
+#endif
+
 #if defined(WIN32)
   dt_capabilities_add("windows");
   dt_capabilities_add("nonapple");
@@ -2773,6 +2811,9 @@ void dt_cleanup()
     dt_gui_process_events();
 
     dt_ctl_switch_mode_to("");
+#ifdef HAVE_MCP
+    dt_mcp_gui_server_stop();
+#endif
     dt_dbus_destroy(darktable.dbus);
 
 /* How is darktable shutdown working safely?

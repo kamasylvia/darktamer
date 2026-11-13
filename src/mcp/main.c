@@ -19,6 +19,7 @@
 #include "common/darktable.h"
 #include "common/file_location.h"
 #include "mcp/dt_bridge.h"
+#include "mcp/mcp_gui_server.h"
 #include "mcp/mcp_jsonrpc.h"
 #include "mcp/mcp_tools.h"
 
@@ -29,6 +30,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#ifdef G_OS_UNIX
+#include <gio/gio.h>
+#include <gio/gunixsocketaddress.h>
+#include <poll.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#endif
 
 #ifdef _WIN32
 #include "win/main_wrapper.h" // provides wmain() for the -municode CRT entry
@@ -50,9 +60,115 @@ static gboolean _has_conf(char **argv, int argc, const char *key_prefix)
   return FALSE;
 }
 
+#ifdef G_OS_UNIX
+// write everything or fail
+static gboolean _write_all(int fd, const guint8 *buf, ssize_t n)
+{
+  while(n > 0)
+  {
+    const ssize_t w = write(fd, buf, n);
+    if(w < 0)
+    {
+      if(errno == EINTR) continue;
+      return FALSE;
+    }
+    buf += w;
+    n -= w;
+  }
+  return TRUE;
+}
+
+// --bridge: pump bytes between an MCP client's stdio and a running GUI's
+// socket. framing passes through untouched; each end negotiates it itself.
+// stdin EOF shuts the write side down so the GUI's pending replies still
+// arrive before the connector exits
+static int _bridge_run(const char *path)
+{
+  GError *err = NULL;
+  GSocketClient *client = g_socket_client_new();
+  GSocketAddress *addr = g_unix_socket_address_new(path);
+  GSocketConnection *conn =
+    g_socket_client_connect(client, (GSocketConnectable *)addr, NULL, &err);
+  g_object_unref(addr);
+  g_object_unref(client);
+  if(!conn)
+  {
+    fprintf(stderr, "darktable-mcp: cannot connect to %s: %s\n"
+                    " (is the GUI running with --mcp?)\n",
+            path, err ? err->message : "?");
+    if(err) g_error_free(err);
+    return 1;
+  }
+  const int sfd = g_socket_get_fd(g_socket_connection_get_socket(conn));
+  // non-blocking, so the keepalive probe below can read without hanging
+  fcntl(sfd, F_SETFL, fcntl(sfd, F_GETFL, 0) | O_NONBLOCK);
+
+  guint8 buf[16384];
+  gboolean stdin_open = TRUE;
+  gboolean alive = TRUE;
+  while(alive)
+  {
+    struct pollfd pfd[2] = { { .fd = STDIN_FILENO, .events = POLLIN, .revents = 0 },
+                             { .fd = sfd, .events = POLLIN, .revents = 0 } };
+    // a timeout, since poll() has been seen sleeping through a unix-socket
+    // peer close on macOS; the probe below then ends the loop
+    const int r = poll(pfd, stdin_open ? 2 : 1, 1000);
+    if(r < 0)
+    {
+      if(errno == EINTR) continue;
+      break;
+    }
+    if(stdin_open && (pfd[0].revents & (POLLIN | POLLHUP)))
+    {
+      const ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+      if(n <= 0)
+      {
+        stdin_open = FALSE;
+        shutdown(sfd, SHUT_WR);
+      }
+      else if(!_write_all(sfd, buf, n))
+        break;
+    }
+    if((pfd[1].revents & (POLLIN | POLLHUP | POLLERR)) || r == 0)
+    {
+      const ssize_t n = read(sfd, buf, sizeof(buf));
+      if(n <= 0)
+      {
+        if(n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) continue;
+        alive = FALSE;
+      }
+      else if(!_write_all(STDOUT_FILENO, buf, n))
+        alive = FALSE;
+    }
+  }
+  g_object_unref(conn);
+  return 0;
+}
+#endif
+
 int main(int argc, char **argv)
 {
   dt_loc_init(NULL, NULL, NULL, NULL, NULL, NULL);
+
+  // --bridge: connector to a running GUI, no darktable init at all. a path
+  // from --socket wins over the default one the GUI advertises
+  if(_has_flag(argv, argc, "--bridge"))
+  {
+#ifdef G_OS_UNIX
+    const char *socket_path = NULL;
+    for(int i = 1; i + 1 < argc; i++)
+      if(!g_strcmp0(argv[i], "--socket")) socket_path = argv[i + 1];
+    gchar *def = NULL;
+    if(!socket_path) def = dt_mcp_gui_server_default_path();
+    const int rc = _bridge_run(socket_path ? socket_path : def);
+    g_free(def);
+    return rc;
+#else
+    fprintf(stderr, "darktable-mcp: --bridge needs unix sockets\n");
+    return 1;
+#endif
+  }
+
   char localedir[PATH_MAX] = { 0 };
   dt_loc_get_localedir(localedir, sizeof(localedir));
   bindtextdomain(GETTEXT_PACKAGE, localedir);

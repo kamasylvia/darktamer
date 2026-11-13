@@ -34,6 +34,7 @@
     <section name="accel" title="shortcuts with multiple instances"/>
     <section name="geoloc" title="map / geolocalization view"/>
     <section name="slideshow" title="slideshow view"/>
+    <section name="mcp" title="AI agent server"/>
   </dttab>
 
   <dtconfig common="yes">
@@ -4685,5 +4686,29 @@
     <default>90</default>
     <shortdescription>picture info opacity</shortdescription>
     <longdescription>opacity of all three info rows, in percent</longdescription>
+  </dtconfig>
+  <!-- MCP GUI server: serves the same tools as the headless mcp binary
+       from the running GUI, so edits to the open image show on the canvas
+       live. the socket is what the mcp bridge connector connects to. -->
+  <dtconfig prefs="misc" section="mcp">
+    <name>plugins/mcp/gui_server</name>
+    <type>bool</type>
+    <default>false</default>
+    <shortdescription>serve MCP tools from the running GUI</shortdescription>
+    <longdescription>listen on a unix socket and answer the darktable-mcp protocol inside this instance; edits to the image open in the darkroom apply live. darktable --mcp sets this for one run</longdescription>
+  </dtconfig>
+  <dtconfig prefs="misc" section="mcp">
+    <name>plugins/mcp/gui_socket</name>
+    <type>string</type>
+    <default></default>
+    <shortdescription>MCP GUI server socket path</shortdescription>
+    <longdescription>unix socket the in-GUI MCP server listens on; empty means $XDG_RUNTIME_DIR/darktable-mcp.sock with a tmpdir fallback</longdescription>
+  </dtconfig>
+  <dtconfig prefs="misc" section="mcp">
+    <name>plugins/mcp/read_only</name>
+    <type>bool</type>
+    <default>false</default>
+    <shortdescription>MCP server refuses edits</shortdescription>
+    <longdescription>when set, the in-GUI MCP server refuses every tool that would change the library, like darktable-mcp --read-only does</longdescription>
   </dtconfig>
 </dtconfiglist>

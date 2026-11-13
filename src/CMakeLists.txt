@@ -268,6 +268,24 @@ if(WIN32)
                "${CMAKE_CURRENT_BINARY_DIR}/win/darktable.exe.manifest")
 endif(WIN32)
 
+if(USE_MCP)
+  # the MCP transport and tool layers, shared by the darktable-mcp binary and
+  # the in-GUI server (mcp_gui_server hooks darktable.c via HAVE_MCP)
+  list(APPEND SOURCE_FILES
+    "mcp/mcp_framing.c"
+    "mcp/mcp_jsonrpc.c"
+    "mcp/mcp_tools.c"
+    "mcp/dt_bridge.c"
+    "mcp/mcp_gui_server.c")
+  list(APPEND HEADER_FILES
+    "mcp/mcp_framing.h"
+    "mcp/mcp_jsonrpc.h"
+    "mcp/mcp_tools.h"
+    "mcp/dt_bridge.h"
+    "mcp/mcp_gui_server.h")
+  add_definitions("-DHAVE_MCP")
+endif(USE_MCP)
+
 set(SOURCES ${SOURCE_FILES} ${HEADER_FILES})
 
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "ppc64le")

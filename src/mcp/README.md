@@ -26,8 +26,15 @@ The binary lands at `build/bin/darktable-mcp`.
 ## Running
 
 ```sh
-darktable-mcp [--read-only] [--core <darktable core options...>]
+darktable-mcp [--read-only | --bridge [--socket PATH]] [--core <darktable core options...>]
 ```
+
+Two modes:
+
+- **headless (default)** — a worker of its own: `dt_init` without a GUI, tools
+  served over stdio, against its own library (below).
+- **`--bridge`** — a connector to a running darktable GUI; no darktable init at
+  all. See [Driving the running GUI](#driving-the-running-gui-live-preview).
 
 `--read-only` is the server's own flag and goes **before** `--core`. Everything
 after `--core` is forwarded verbatim to `dt_init`, so all darktable core options
@@ -93,6 +100,51 @@ stderr), so a client can speak the protocol cleanly.
 
 > darktable takes a PID lock on `library.db`/`data.db`, so catalog mode must run
 > while the GUI is **not** holding that library (or against a copy).
+
+## Driving the running GUI (live preview)
+
+The headless server can only see the library on disk. To have an agent edit the
+image **you are looking at** — with the canvas updating as the tools run — the
+same tool set is also served from inside a running darktable:
+
+```sh
+darktable --mcp                     # serve MCP from this instance
+darktable --mcp --mcp-socket PATH   # custom socket (default below)
+```
+
+`--mcp` sets the `plugins/mcp/gui_server` conf key, so the preference dialog
+(miscellaneous → AI agent server) can enable it permanently instead. The server
+listens on a unix socket at `$XDG_RUNTIME_DIR/darktable-mcp.sock` (tmpdir
+fallback; `plugins/mcp/gui_socket` overrides). `plugins/mcp/read_only` is the
+in-GUI counterpart of `--read-only`.
+
+MCP clients speak stdio, so a session connects through the bridge connector —
+a byte pump between a client and that socket, no darktable init involved:
+
+```sh
+darktable-mcp --bridge [--socket PATH]
+```
+
+Point the MCP client's stdio command at that and the session lands in the GUI.
+One client at a time; the GUI's lifetime is independent of the session.
+
+What changes in GUI mode is **routing**, not the tool list:
+
+- `get_open_image` reports `{ imgid, path, view }` for what the darkroom shows.
+- `open_image` loads a catalog image into the darkroom (import first; nothing
+  is imported implicitly).
+- `apply_stack` is the live edit tool. On the image the darkroom is showing
+  every stack entry commits through the GUI's own path — history, undo record,
+  `changed` tag, canvas redraw — so the picture updates immediately and the
+  module's sliders move to the new values. On any other image it writes
+  history + sidecar the way the headless server does, and the canvas is left
+  alone. With no target named, the open image is assumed.
+- Requests that target the open image run on the GUI thread; everything else
+  (renders, exports, library edits) runs off-thread, like the headless server.
+
+The GUI can also be driven headlessly the other way round: the headless server
+against the GUI's own config directory still cannot share the library (PID
+lock), so for live preview the in-GUI server is the only route.
 
 ## Connecting to Claude
 
@@ -252,6 +304,17 @@ changing a setting mid-session would silently invalidate every result gathered
 before it, with nothing recording that it happened. Restart with
 `--conf key=value` instead, which makes the change a visible session boundary.
 
+### Live GUI
+
+GUI mode only — these no-op or report null from the headless server. See
+[Driving the running GUI](#driving-the-running-gui-live-preview).
+
+| Tool | Input | Output |
+|------|-------|--------|
+| `get_open_image` | – | `{imgid, path, view}` for what the darkroom shows; `imgid: null` when none |
+| `open_image` | `{imgid \| path}` | loads a catalog image into the darkroom; reports the resulting open state |
+| `apply_stack` | `{stack[], imgid?, input?, disable_tone_mappers?}` | applies stack entries; live on the open image, library write elsewhere; `{"ok":true,"imgid":N}` |
+
 ### Library (catalog)
 
 | Tool | Input | Output |
@@ -374,11 +437,18 @@ The result's text is JSON like
 
 ```text
 src/mcp/
-  main.c            process lifecycle: dt_init boot, --core passthrough, stdio loop
-  mcp_jsonrpc.c/.h  transport: framing, JSON-RPC dispatch, error objects
-  mcp_tools.c/.h    tool registry + JSON <-> C marshalling
+  main.c            process lifecycle: dt_init boot, --core passthrough,
+                    stdio loop, --bridge connector
+  mcp_framing.c/.h  wire formats: newline-delimited + Content-Length framing
+  mcp_jsonrpc.c/.h  transport: JSON-RPC dispatch, error objects (stdio loop)
+  mcp_tools.c/.h    tool registry + JSON <-> C marshalling + GUI routing
+  mcp_gui_server.c/.h the in-GUI server: unix socket, GUI-thread routing
   dt_bridge.c/.h    the ONLY unit that calls libdarktable
 ```
+
+The transport, tools and bridge layers compile into `lib_darktable` (gated by
+`USE_MCP`); `darktable-mcp` is just the headless entry point, and the GUI links
+the same code through `mcp_gui_server`.
 
 `dt_bridge.c` isolates every libdarktable call, so API churn (e.g. a bumped
 module param version) stays contained. Parameters are always addressed through
@@ -423,4 +493,13 @@ handler is ignored with a warning on stderr.
   clears that history again before the request returns.
 - **A crash mid-request can strand a scratch row**, since cleanup runs when the
   request finishes. It shows up as an unexpected image in the catalog.
-- Not included: driving a live/open darktable GUI (this is a background worker).
+- String parameters are set by name like any other field: a `char` array
+  (`borders`' `text_model`, `text_font`, `film_caption`, …) takes a JSON
+  string, clamped to its capacity at whole utf-8 characters, with the tail
+  zeroed so the blob stays byte-deterministic. `module_schema` publishes them
+  as `"type": "string"` with a `max_length`. Enum fields accept their
+  introspection id or their `$DESCRIPTION` label (`"blur"`,
+  `"blurred picture"`, …).
+- `list_modules` and `module_schema` carry each module's display `name` and
+  `aliases`, so a caller can resolve e.g. the framing module's op name
+  `borders` from its UI name.

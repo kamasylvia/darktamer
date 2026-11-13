@@ -600,6 +600,268 @@ static void test_conflict_in_batch_skips_existing(void **state)
   g_hash_table_destroy(claimed);
 }
 
+// ---------------------------------------------------------------------------
+// char-array (string) params
+// ---------------------------------------------------------------------------
+
+// the introspection-driven param tools need a module to work on, and booting
+// darktable for one is out of scope here. this fake mirrors what the perl
+// parser emits for `float x; char label[8];`: a linear FLOAT entry, a linear
+// CHAR entry named "label[0]", and an ARRAY entry whose count is the capacity
+// and whose field points back at the CHAR entry. its get_f() resolves only the
+// exact emitted names, so _resolve_field()'s bare-array-name fallback is what
+// is actually under test
+typedef struct { float amount; char label[8]; } _fake_params_t;
+
+static dt_introspection_field_t _fake_linear[4];
+
+static dt_introspection_t _fake_intro = {
+  .api_version = DT_INTROSPECTION_VERSION,
+  .params_version = 1,
+  .size = sizeof(_fake_params_t),
+};
+
+static void _fake_build(void)
+{
+  static const char *const label_name = "label";
+  static const char *const label_elem = "label[0]";
+  static const char *const amount_name = "amount";
+
+  memset(_fake_linear, 0, sizeof(_fake_linear));
+  _fake_linear[0].Float.header.type = DT_INTROSPECTION_TYPE_FLOAT;
+  _fake_linear[0].Float.header.name = amount_name;
+  _fake_linear[0].Float.header.field_name = amount_name;
+  _fake_linear[0].Float.header.size = sizeof(float);
+  _fake_linear[0].Float.header.offset = offsetof(_fake_params_t, amount);
+  _fake_linear[0].Float.Min = -10.0f;
+  _fake_linear[0].Float.Max = 10.0f;
+  _fake_linear[1].Char.header.type = DT_INTROSPECTION_TYPE_CHAR;
+  _fake_linear[1].Char.header.name = label_elem;
+  _fake_linear[1].Char.header.field_name = label_elem;
+  _fake_linear[1].Char.header.size = 1;
+  _fake_linear[1].Char.header.offset = offsetof(_fake_params_t, label);
+  _fake_linear[2].Array.header.type = DT_INTROSPECTION_TYPE_ARRAY;
+  _fake_linear[2].Array.header.name = label_name;
+  _fake_linear[2].Array.header.field_name = label_name;
+  _fake_linear[2].Array.header.size = sizeof(((_fake_params_t *)0)->label);
+  _fake_linear[2].Array.header.offset = offsetof(_fake_params_t, label);
+  _fake_linear[2].Array.count = G_N_ELEMENTS(((_fake_params_t *)0)->label);
+  _fake_linear[2].Array.type = DT_INTROSPECTION_TYPE_CHAR;
+  _fake_linear[2].Array.field = &_fake_linear[1];
+  _fake_linear[3].header.type = DT_INTROSPECTION_TYPE_NONE;
+  _fake_intro.field = NULL;
+}
+
+// resolves only the emitted names: "amount" and "label[0]", not bare "label"
+static dt_introspection_field_t *_fake_get_f(const char *name)
+{
+  for(int i = 0; i < 3; i++)
+    if(!strcmp(_fake_linear[i].header.name, name)) return &_fake_linear[i];
+  return NULL;
+}
+
+// mirrors the generated getter: the bare array name and its [0] element both
+// reach the same bytes
+static void *_fake_get_p(const void *param, const char *name)
+{
+  _fake_params_t *p = (_fake_params_t *)param;
+  if(!strcmp(name, "amount")) return &p->amount;
+  if(!strcmp(name, "label") || !strcmp(name, "label[0]")) return p->label;
+  return NULL;
+}
+
+static dt_introspection_t *_fake_get_intro(void) { return &_fake_intro; }
+static dt_introspection_field_t *_fake_get_linear(void) { return _fake_linear; }
+
+static dt_iop_module_so_t *_fake_so(void)
+{
+  static dt_iop_module_so_t so;
+  memset(&so, 0, sizeof(so));
+  g_strlcpy(so.op, "fake", sizeof(so.op));
+  so.have_introspection = TRUE;
+  so.get_introspection = _fake_get_intro;
+  so.get_introspection_linear = _fake_get_linear;
+  so.get_f = _fake_get_f;
+  so.get_p = _fake_get_p;
+  return &so;
+}
+
+// build a one-field JsonObject parsed from JSON, values as strings or numbers
+static JsonObject *_fields_from(const char *json_text)
+{
+  JsonParser *p = json_parser_new();
+  json_parser_load_from_data(p, json_text, -1, NULL);
+  JsonNode *root = json_parser_get_root(p);
+  JsonObject *o = json_node_get_object(root);
+  json_object_ref(o);          // survive the parser being freed
+  g_object_unref(p);
+  return o;
+}
+
+// pull one string field back out of a _write_fields_object JSON document
+static char *_decoded_field(const char *json, const char *field)
+{
+  JsonParser *p = json_parser_new();
+  json_parser_load_from_data(p, json, -1, NULL);
+  JsonNode *root = json_parser_get_root(p);
+  JsonObject *o = json_node_get_object(root);
+  char *out = NULL;
+  if(o && json_object_has_member(o, field))
+  {
+    JsonNode *v = json_object_get_member(o, field);
+    if(JSON_NODE_HOLDS_VALUE(v) && json_node_get_value_type(v) == G_TYPE_STRING)
+      out = g_strdup(json_node_get_string(v));
+  }
+  g_object_unref(p);
+  return out;
+}
+
+static void test_char_capacity_counts_the_array(void **state)
+{
+  (void)state;
+  _fake_build();
+  dt_iop_module_so_t *so = _fake_so();
+
+  assert_int_equal(_char_capacity(so, &_fake_linear[0]), 0);   // float
+  assert_int_equal(_char_capacity(so, &_fake_linear[1]), 8);   // label[0]
+}
+
+// the bare array name resolves to the CHAR element the parser emitted
+static void test_resolve_field_accepts_bare_array_name(void **state)
+{
+  (void)state;
+  _fake_build();
+  dt_iop_module_so_t *so = _fake_so();
+
+  assert_ptr_equal(_resolve_field(so, "amount"), &_fake_linear[0]);
+  assert_ptr_equal(_resolve_field(so, "label[0]"), &_fake_linear[1]);
+  assert_ptr_equal(_resolve_field(so, "label"), &_fake_linear[1]);
+  assert_null(_resolve_field(so, "nope"));
+}
+
+// set by name, read back by name: the round trip the framing module needs for
+// text_model / text_font / film_caption
+static void test_char_field_round_trip(void **state)
+{
+  (void)state;
+  _fake_build();
+  dt_iop_module_so_t *so = _fake_so();
+
+  JsonObject *fields = _fields_from("{\"label\": \"KODAK\"}");
+  size_t size = 0;
+  char *err = NULL;
+  uint8_t *blob = _seed_and_apply(so, NULL, fields, &size, &err);
+  assert_non_null(blob);
+  assert_null(err);
+  assert_int_equal(size, sizeof(_fake_params_t));
+
+  _fake_params_t *p = (_fake_params_t *)blob;
+  assert_string_equal(p->label, "KODAK");
+  // every byte behind the NUL stays zero, so the blob hashes deterministically
+  for(int i = 6; i < 8; i++) assert_int_equal(p->label[i], 0);
+
+  // and the decoder reads the string back, byte-exact
+  JsonBuilder *b = json_builder_new();
+  _write_fields_object(so, blob, b);
+  char *json = _builder_to_string(b);
+  g_object_unref(b);
+  char *got = _decoded_field(json, "label[0]");
+  assert_string_equal(got, "KODAK");
+
+  g_free(got); g_free(json); g_free(blob);
+  json_object_unref(fields);
+}
+
+// an over-long string is cut at whole utf-8 characters with the NUL kept, not
+// silently clamped mid-sequence
+static void test_char_field_truncates_on_utf8_boundary(void **state)
+{
+  (void)state;
+  _fake_build();
+  dt_iop_module_so_t *so = _fake_so();
+
+  // four "ü" (2 bytes each) = 8 bytes; capacity 8 fits 7 bytes, so 3 chars
+  JsonObject *fields = _fields_from("{\"label\": \"üüüü\"}");
+  size_t size = 0;
+  char *err = NULL;
+  uint8_t *blob = _seed_and_apply(so, NULL, fields, &size, &err);
+  assert_non_null(blob);
+  assert_null(err);
+
+  _fake_params_t *p = (_fake_params_t *)blob;
+  assert_string_equal(p->label, "üüü");
+  assert_int_equal(p->label[6], '\0');
+  assert_int_equal(p->label[7], 0);
+
+  g_free(blob);
+  json_object_unref(fields);
+}
+
+// a shorter string must clear the bytes a longer one had left behind
+static void test_char_field_shorter_string_zeroes_tail(void **state)
+{
+  (void)state;
+  _fake_build();
+  dt_iop_module_so_t *so = _fake_so();
+
+  JsonObject *long_fields = _fields_from("{\"label\": \"KODAK\"}");
+  size_t size = 0;
+  uint8_t *blob = _seed_and_apply(so, NULL, long_fields, &size, NULL);
+  assert_non_null(blob);
+  json_object_unref(long_fields);
+
+  // reuse the blob as the defaults source, as _apply_entry() does with a
+  // module's live params: the seeded bytes carry the old string
+  JsonObject *short_fields = _fields_from("{\"label\": \"ab\"}");
+  uint8_t *rebuilt = _seed_and_apply(so, blob, short_fields, &size, NULL);
+  assert_non_null(rebuilt);
+
+  _fake_params_t *p = (_fake_params_t *)rebuilt;
+  assert_string_equal(p->label, "ab");
+  for(int i = 3; i < 8; i++) assert_int_equal(p->label[i], 0);
+
+  g_free(rebuilt); g_free(blob);
+  json_object_unref(short_fields);
+}
+
+// a non-string value for a char field is refused, not coerced
+static void test_char_field_refuses_numbers(void **state)
+{
+  (void)state;
+  _fake_build();
+  dt_iop_module_so_t *so = _fake_so();
+
+  JsonObject *fields = _fields_from("{\"label\": 5}");
+  size_t size = 0;
+  char *err = NULL;
+  uint8_t *blob = _seed_and_apply(so, NULL, fields, &size, &err);
+  assert_null(blob);
+  assert_non_null(err);
+  assert_true(strstr(err, "expects a string") != NULL);
+
+  g_free(err);
+  json_object_unref(fields);
+}
+
+// an unknown field still fails the same way it always did
+static void test_unknown_field_still_refused(void **state)
+{
+  (void)state;
+  _fake_build();
+  dt_iop_module_so_t *so = _fake_so();
+
+  JsonObject *fields = _fields_from("{\"nope\": \"x\"}");
+  size_t size = 0;
+  char *err = NULL;
+  uint8_t *blob = _seed_and_apply(so, NULL, fields, &size, &err);
+  assert_null(blob);
+  assert_non_null(err);
+  assert_true(strstr(err, "unknown or non-scalar field") != NULL);
+
+  g_free(err);
+  json_object_unref(fields);
+}
+
 int main(int argc, char *argv[])
 {
   const struct CMUnitTest tests[] = {
@@ -622,6 +884,13 @@ int main(int argc, char *argv[])
     cmocka_unit_test(test_conflict_overwrite_and_skip),
     cmocka_unit_test(test_conflict_in_batch_collision),
     cmocka_unit_test(test_conflict_in_batch_skips_existing),
+    cmocka_unit_test(test_char_capacity_counts_the_array),
+    cmocka_unit_test(test_resolve_field_accepts_bare_array_name),
+    cmocka_unit_test(test_char_field_round_trip),
+    cmocka_unit_test(test_char_field_truncates_on_utf8_boundary),
+    cmocka_unit_test(test_char_field_shorter_string_zeroes_tail),
+    cmocka_unit_test(test_char_field_refuses_numbers),
+    cmocka_unit_test(test_unknown_field_still_refused),
   };
   return cmocka_run_group_tests(tests, _setup, _teardown);
 }

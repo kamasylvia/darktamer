@@ -141,6 +141,7 @@ static const char *_type_name(dt_introspection_type_t t)
     case DT_INTROSPECTION_TYPE_USHORT: return "ushort";
     case DT_INTROSPECTION_TYPE_BOOL:   return "bool";
     case DT_INTROSPECTION_TYPE_ENUM:   return "enum";
+    case DT_INTROSPECTION_TYPE_CHAR:   return "string";
     default:                           return "other";
   }
 }
@@ -166,8 +167,48 @@ static gboolean _is_scalar(dt_introspection_type_t t)
   }
 }
 
+// capacity in bytes of the char array backing a linear CHAR field (0 when
+// there is none, so a plain char). the linear list stores one element entry
+// named "name[0]"; only the ARRAY entry carries the element count
+static size_t _char_capacity(dt_iop_module_so_t *so, dt_introspection_field_t *f)
+{
+  if(f->header.type != DT_INTROSPECTION_TYPE_CHAR) return 0;
+  for(dt_introspection_field_t *a = so->get_introspection_linear();
+      a && a->header.type != DT_INTROSPECTION_TYPE_NONE; a++)
+    if(a->header.type == DT_INTROSPECTION_TYPE_ARRAY
+       && a->Array.type == DT_INTROSPECTION_TYPE_CHAR
+       && a->Array.field == f)
+      return a->Array.count;
+  return 1;
+}
+
+// resolve a field by name; a char array resolves to its first element, since
+// get_f() hands back the ARRAY entry for the bare name and only the element
+// entry carries the type the callers below branch on
+static dt_introspection_field_t *_resolve_field(dt_iop_module_so_t *so,
+                                                const char *name)
+{
+  dt_introspection_field_t *f = so->get_f(name);
+  if(f && f->header.type == DT_INTROSPECTION_TYPE_ARRAY
+     && f->Array.type == DT_INTROSPECTION_TYPE_CHAR)
+    f = f->Array.field;
+  if(f) return f;
+  if(!so->get_introspection_linear) return NULL;
+  for(dt_introspection_field_t *it = so->get_introspection_linear();
+      it && it->header.type != DT_INTROSPECTION_TYPE_NONE; it++)
+    if(it->header.type == DT_INTROSPECTION_TYPE_CHAR)
+    {
+      const char *bracket = strchr(it->header.name, '[');
+      if(bracket && strlen(name) == (size_t)(bracket - it->header.name)
+         && !strncmp(it->header.name, name, bracket - it->header.name))
+        return it;
+    }
+  return NULL;
+}
+
 // read the scalar at p (of introspection type t) and add it to the builder
-static void _add_value(JsonBuilder *b, dt_introspection_field_t *f, const void *p)
+static void _add_value(dt_iop_module_so_t *so, JsonBuilder *b,
+                       dt_introspection_field_t *f, const void *p)
 {
   switch(f->header.type)
   {
@@ -208,6 +249,19 @@ static void _add_value(JsonBuilder *b, dt_introspection_field_t *f, const void *
       else     json_builder_add_int_value(b, v);
       break;
     }
+    case DT_INTROSPECTION_TYPE_CHAR:
+    {
+      // a char array is a NUL-terminated string; read it within its capacity
+      // in case the module left it unterminated
+      const size_t cap = _char_capacity(so, (dt_introspection_field_t *)f);
+      const size_t maxc = cap ? cap : 1;
+      const char *end = memchr(p, '\0', maxc);
+      const size_t len = end ? (size_t)(end - (const char *)p) : maxc;
+      gchar *s = g_strndup((const char *)p, len);
+      json_builder_add_string_value(b, s);
+      g_free(s);
+      break;
+    }
     default:
       json_builder_add_null_value(b);
       break;
@@ -229,6 +283,7 @@ static void _write_default(dt_introspection_field_t *f, void *p)
     case DT_INTROSPECTION_TYPE_USHORT: *(unsigned short *)p = f->UShort.Default; break;
     case DT_INTROSPECTION_TYPE_BOOL:   *(gboolean *)p = f->Bool.Default; break;
     case DT_INTROSPECTION_TYPE_ENUM:   *(int *)p = f->Enum.Default; break;
+    case DT_INTROSPECTION_TYPE_CHAR:   *(char *)p = f->Char.Default; break;
     default: break;
   }
 }
@@ -299,6 +354,10 @@ char *dt_bridge_list_modules_json(void)
     json_builder_begin_object(b);
     json_builder_set_member_name(b, "operation");
     json_builder_add_string_value(b, so->op);
+    json_builder_set_member_name(b, "name");
+    json_builder_add_string_value(b, so->name ? so->name() : so->op);
+    json_builder_set_member_name(b, "aliases");
+    json_builder_add_string_value(b, so->aliases ? so->aliases() : "");
     json_builder_set_member_name(b, "version");
     json_builder_add_int_value(b, so->version ? so->version() : -1);
     json_builder_set_member_name(b, "have_introspection");
@@ -333,6 +392,10 @@ char *dt_bridge_module_schema_json(const char *op, char **err)
   json_builder_begin_object(b);
   json_builder_set_member_name(b, "operation");
   json_builder_add_string_value(b, so->op);
+  json_builder_set_member_name(b, "name");
+  json_builder_add_string_value(b, so->name ? so->name() : so->op);
+  json_builder_set_member_name(b, "aliases");
+  json_builder_add_string_value(b, so->aliases ? so->aliases() : "");
   json_builder_set_member_name(b, "params_version");
   json_builder_add_int_value(b, intro->params_version);
   json_builder_set_member_name(b, "params_size");
@@ -344,14 +407,34 @@ char *dt_bridge_module_schema_json(const char *op, char **err)
   for(dt_introspection_field_t *f = lin;
       f && f->header.type != DT_INTROSPECTION_TYPE_NONE; f++)
   {
-    if(!_is_scalar(f->header.type)) continue;  // skip root struct / arrays / unions
+    // skip the root struct, arrays and unions; char arrays are published as
+    // string fields
+    if(!_is_scalar(f->header.type)
+       && f->header.type != DT_INTROSPECTION_TYPE_CHAR) continue;
     json_builder_begin_object(b);
     json_builder_set_member_name(b, "name");
-    json_builder_add_string_value(b, f->header.field_name);
+    if(f->header.type == DT_INTROSPECTION_TYPE_CHAR)
+    {
+      // listed as "name[0]"; publish the bare array name
+      const char *bracket = strchr(f->header.field_name, '[');
+      const size_t bare = bracket ? (size_t)(bracket - f->header.field_name)
+                                  : strlen(f->header.field_name);
+      gchar *nm = g_strndup(f->header.field_name, bare);
+      json_builder_add_string_value(b, nm);
+      g_free(nm);
+    }
+    else
+      json_builder_add_string_value(b, f->header.field_name);
     json_builder_set_member_name(b, "type");
     json_builder_add_string_value(b, _type_name(f->header.type));
     json_builder_set_member_name(b, "offset");
     json_builder_add_int_value(b, (gint64)f->header.offset);
+    if(f->header.type == DT_INTROSPECTION_TYPE_CHAR)
+    {
+      const size_t cap = _char_capacity(so, f);
+      json_builder_set_member_name(b, "max_length");
+      json_builder_add_int_value(b, (gint64)(cap > 1 ? cap - 1 : 0));
+    }
     switch(f->header.type)
     {
       case DT_INTROSPECTION_TYPE_FLOAT:
@@ -394,6 +477,11 @@ char *dt_bridge_module_schema_json(const char *op, char **err)
           json_builder_add_string_value(b, e->name);
           json_builder_set_member_name(b, "value");
           json_builder_add_int_value(b, e->value);
+          if(e->description)
+          {
+            json_builder_set_member_name(b, "description");
+            json_builder_add_string_value(b, e->description);
+          }
           json_builder_end_object(b);
         }
         json_builder_end_array(b);
@@ -410,7 +498,8 @@ char *dt_bridge_module_schema_json(const char *op, char **err)
   return out;
 }
 
-// write a { field: value, ... } object for all scalar fields of `blob`
+// write a { field: value, ... } object for all scalar and char-array fields
+// of `blob`
 static void _write_fields_object(dt_iop_module_so_t *so, const void *blob,
                                  JsonBuilder *b)
 {
@@ -419,11 +508,12 @@ static void _write_fields_object(dt_iop_module_so_t *so, const void *blob,
   for(dt_introspection_field_t *f = lin;
       f && f->header.type != DT_INTROSPECTION_TYPE_NONE; f++)
   {
-    if(!_is_scalar(f->header.type)) continue;
+    if(!_is_scalar(f->header.type)
+       && f->header.type != DT_INTROSPECTION_TYPE_CHAR) continue;
     void *p = so->get_p((void *)blob, f->header.name);
     if(!p) continue;
     json_builder_set_member_name(b, f->header.field_name);
-    _add_value(b, f, p);
+    _add_value(so, b, f, p);
   }
   json_builder_end_object(b);
 }
@@ -490,17 +580,24 @@ static uint8_t *_seed_and_apply(dt_iop_module_so_t *so, const void *defaults,
   }
   else
   {
-    // only scalar defaults are reachable here, and a non-scalar left at
-    // zero would be worse than refusing
+    // only scalar and char-array defaults are reachable here, and any other
+    // non-scalar left at zero would be worse than refusing. a CHAR array's
+    // ARRAY entry is its capacity record, not a field of its own
     for(dt_introspection_field_t *f = lin;
         f && f->header.type != DT_INTROSPECTION_TYPE_NONE; f++)
-      if(!_is_scalar(f->header.type) && f->header.size != intro->size)
+    {
+      if(f->header.type == DT_INTROSPECTION_TYPE_ARRAY
+         && f->Array.type == DT_INTROSPECTION_TYPE_CHAR) continue;
+      if(!_is_scalar(f->header.type)
+         && f->header.type != DT_INTROSPECTION_TYPE_CHAR
+         && f->header.size != intro->size)
       {
         _seterr(err, "module '%s' has non-scalar parameters; pass a full blob_hex"
                      " instead of fields", so->op);
         g_free(blob);
         return NULL;
       }
+    }
 
     for(dt_introspection_field_t *f = lin;
         f && f->header.type != DT_INTROSPECTION_TYPE_NONE; f++)
@@ -517,8 +614,9 @@ static uint8_t *_seed_and_apply(dt_iop_module_so_t *so, const void *defaults,
     for(GList *it = members; it; it = g_list_next(it))
     {
       const char *name = (const char *)it->data;
-      dt_introspection_field_t *f = so->get_f(name);
-      if(!f || !_is_scalar(f->header.type))
+      dt_introspection_field_t *f = _resolve_field(so, name);
+      if(!f || (!_is_scalar(f->header.type)
+                && f->header.type != DT_INTROSPECTION_TYPE_CHAR))
       {
         _seterr(err, "unknown or non-scalar field '%s' for module '%s'", name, so->op);
         g_list_free(members);
@@ -528,14 +626,46 @@ static uint8_t *_seed_and_apply(dt_iop_module_so_t *so, const void *defaults,
       void *p = so->get_p(blob, f->header.name);
       if(!p) continue;
       JsonNode *node = json_object_get_member(fields, name);
-      if(f->header.type == DT_INTROSPECTION_TYPE_ENUM
+      if(f->header.type == DT_INTROSPECTION_TYPE_CHAR)
+      {
+        if(json_node_get_value_type(node) != G_TYPE_STRING)
+        {
+          _seterr(err, "field '%s' of module '%s' expects a string", name, so->op);
+          g_list_free(members);
+          g_free(blob);
+          return NULL;
+        }
+        // fit whole utf-8 characters into capacity-1, keep the NUL, and zero
+        // the tail so the blob stays fully determined (params are hashed and
+        // stored as raw bytes)
+        const size_t cap = _char_capacity(so, f);
+        const size_t maxc = cap > 1 ? cap - 1 : 0;
+        const char *s = json_node_get_string(node);
+        size_t used = 0;
+        for(const char *q = s; *q; q = g_utf8_next_char(q))
+        {
+          const size_t cb = (size_t)(g_utf8_next_char(q) - q);
+          if(used + cb > maxc) break;
+          used += cb;
+        }
+        memcpy(p, s, used);
+        ((char *)p)[used] = '\0';
+        if(cap > used + 1)
+          memset((char *)p + used + 1, 0, cap - used - 1);
+      }
+      else if(f->header.type == DT_INTROSPECTION_TYPE_ENUM
          && json_node_get_value_type(node) == G_TYPE_STRING)
       {
         const char *sym = json_node_get_string(node);
         int val = 0;
         gboolean found = FALSE;
+        // the introspection id (DT_IOP_...) or the $DESCRIPTION label both
+        // resolve: the descriptions are what the GUI shows and what a caller
+        // naturally reaches for
         for(dt_introspection_type_enum_tuple_t *e = f->Enum.values; e && e->name; e++)
-          if(!g_strcmp0(e->name, sym)) { val = e->value; found = TRUE; break; }
+          if(!g_strcmp0(e->name, sym)
+             || (e->description && !g_ascii_strcasecmp(e->description, sym)))
+          { val = e->value; found = TRUE; break; }
         if(!found)
         {
           _seterr(err, "unknown enum value '%s' for field '%s'", sym, name);
@@ -1114,7 +1244,15 @@ static gboolean _apply_entry(dt_develop_t *dev, JsonObject *entry, char **err)
   memcpy(mod->params, blob, size);
   g_free(blob);
   mod->enabled = enabled;
-  dt_dev_add_history_item_ext(dev, mod, enabled, TRUE);
+  if(dev->gui_attached)
+  {
+    // the live darkroom's own commit: history write, undo record, "changed"
+    // tag, invalidate and the center redraw all happen inside, so the canvas
+    // shows the new params immediately
+    dt_dev_add_history_item(dev, mod, enabled);
+  }
+  else
+    dt_dev_add_history_item_ext(dev, mod, enabled, TRUE);
   return TRUE;
 }
 
@@ -2684,4 +2822,180 @@ gboolean dt_bridge_export_images(const char *in_path, int imgid_in,
   g_list_free(l);
   g_free(ext);
   return all_ok;
+}
+
+// ---------------------------------------------------------------------------
+// live GUI bridge
+// ---------------------------------------------------------------------------
+
+// the image the darkroom is showing, NO_IMGID when none is open. routing runs
+// on this: an edit to this image must go through the live develop, an edit to
+// any other image may take the library path
+dt_imgid_t dt_bridge_open_image(void)
+{
+  if(!darktable.develop || !darktable.view_manager) return NO_IMGID;
+  const dt_view_t *view = dt_view_manager_get_current_view(darktable.view_manager);
+  if(!view || strcmp(view->module_name, "darkroom")) return NO_IMGID;
+  const dt_imgid_t id = darktable.develop->image_storage.id;
+  return dt_is_valid_imgid(id) ? id : NO_IMGID;
+}
+
+// { imgid, path, view } of what the GUI is showing; imgid null when the
+// darkroom has nothing loaded
+char *dt_bridge_open_image_json(char **err)
+{
+  if(!darktable.develop || !darktable.view_manager)
+  {
+    _seterr(err, "no GUI state");
+    return NULL;
+  }
+  const dt_view_t *view = dt_view_manager_get_current_view(darktable.view_manager);
+  const dt_imgid_t id = darktable.develop->image_storage.id;
+  const gboolean open = view && !strcmp(view->module_name, "darkroom")
+                        && dt_is_valid_imgid(id);
+
+  JsonBuilder *b = json_builder_new();
+  json_builder_begin_object(b);
+  json_builder_set_member_name(b, "imgid");
+  if(open) json_builder_add_int_value(b, id);
+  else     json_builder_add_null_value(b);
+  json_builder_set_member_name(b, "path");
+  if(open)
+  {
+    gchar path[PATH_MAX] = { 0 };
+    dt_image_full_path(id, path, sizeof(path), NULL);
+    json_builder_add_string_value(b, path);
+  }
+  else json_builder_add_null_value(b);
+  json_builder_set_member_name(b, "view");
+  json_builder_add_string_value(b, view ? view->module_name : "");
+  json_builder_end_object(b);
+  char *out = _builder_to_string(b);
+  g_object_unref(b);
+  return out;
+}
+
+// which image a request targets, from its arguments; NO_IMGID when the
+// arguments carry neither a valid imgid nor a path in the catalog. this only
+// reads, so it is safe from any thread
+dt_imgid_t dt_bridge_route_imgid(const char *path, int imgid_in)
+{
+  if(imgid_in > 0 && _image_exists((dt_imgid_t)imgid_in)) return (dt_imgid_t)imgid_in;
+  if(path)
+  {
+    gchar *norm = _canonical_path(path);
+    const dt_imgid_t existing = dt_image_get_id_full_path(norm ? norm : path);
+    g_free(norm);
+    if(dt_is_valid_imgid(existing)) return existing;
+  }
+  return NO_IMGID;
+}
+
+// apply stack entries to the live darkroom develop. every entry commits
+// through dt_dev_add_history_item() (see _apply_entry), so the canvas updates
+// per entry. this touches darktable.develop and must run on the GUI thread
+gboolean dt_bridge_apply_stack_open(void *stack_jsonarray,
+                                    gboolean disable_tone_mappers, char **err)
+{
+  dt_develop_t *dev = darktable.develop;
+  if(!dev || !dev->gui_attached)
+  {
+    _seterr(err, "no live develop to apply to");
+    return FALSE;
+  }
+  JsonArray *stack = (JsonArray *)stack_jsonarray;
+  const guint n = stack ? json_array_get_length(stack) : 0;
+
+  if(_read_only && (disable_tone_mappers || n > 0))
+  {
+    _seterr(err, "server is --read-only: applying a stack would modify image %d",
+            dev->image_storage.id);
+    return FALSE;
+  }
+
+  if(disable_tone_mappers)
+  {
+    const char *tms[] = { "sigmoid", "filmicrgb", "agx", "spektrafilm",
+                          "basecurve", NULL };
+    for(int i = 0; tms[i]; i++)
+    {
+      dt_iop_module_t *m = dt_iop_get_module_by_op_priority(dev->iop, tms[i], 0);
+      if(m && m->enabled)
+      {
+        m->enabled = FALSE;
+        dt_dev_add_history_item(dev, m, FALSE);
+      }
+    }
+  }
+
+  for(guint i = 0; i < n; i++)
+  {
+    JsonNode *en = json_array_get_element(stack, i);
+    if(!JSON_NODE_HOLDS_OBJECT(en)
+       || !_apply_entry(dev, json_node_get_object(en), err))
+    {
+      if(!JSON_NODE_HOLDS_OBJECT(en))
+        _seterr(err, "stack[%u] is not an object", i);
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+// apply stack entries to an image the GUI does not show, through a throwaway
+// develop, exactly as the headless server's render-with-stack does
+gboolean dt_bridge_apply_stack_library(int imgid, void *stack_jsonarray,
+                                       gboolean disable_tone_mappers, char **err)
+{
+  int history_end = -1;
+  return _commit_stack((dt_imgid_t)imgid, (JsonArray *)stack_jsonarray,
+                       disable_tone_mappers, &history_end, FALSE, err);
+}
+
+// load an image into the GUI darkroom, the same dt_load_from_string() route
+// the dbus Open method and gimp mode take. resolves imgid to its file first,
+// and refuses to import anything new
+gboolean dt_bridge_gui_open_image(const char *path, int imgid_in, char **err)
+{
+  dt_imgid_t id = NO_IMGID;
+  gchar *known = NULL;
+  if(imgid_in > 0)
+  {
+    if(!_image_exists((dt_imgid_t)imgid_in))
+    {
+      _seterr(err, "no image with imgid %d", imgid_in);
+      return FALSE;
+    }
+    id = (dt_imgid_t)imgid_in;
+    gchar fpath[PATH_MAX] = { 0 };
+    dt_image_full_path(id, fpath, sizeof(fpath), NULL);
+    known = g_strdup(fpath);
+  }
+  else if(path)
+  {
+    gchar *norm = _canonical_path(path);
+    id = dt_image_get_id_full_path(norm ? norm : path);
+    g_free(norm);
+    if(!dt_is_valid_imgid(id))
+    {
+      _seterr(err, "'%s' is not in the catalog; import it first", path);
+      return FALSE;
+    }
+    known = g_strdup(path);
+  }
+  else
+  {
+    _seterr(err, "no imgid or path given");
+    return FALSE;
+  }
+
+  gboolean single = FALSE;
+  const dt_imgid_t loaded = dt_load_from_string(known, TRUE, &single);
+  g_free(known);
+  if(!dt_is_valid_imgid(loaded))
+  {
+    _seterr(err, "failed to open the image in the GUI");
+    return FALSE;
+  }
+  return TRUE;
 }

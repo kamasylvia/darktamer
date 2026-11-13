@@ -35,6 +35,7 @@
 #ifdef HAVE_AI
 #include "gui/preferences_ai.h"
 #endif
+#include "gui/preferences_mcp.h"
 #include "gui/presets.h"
 #include "libs/lib.h"
 #include "preferences_gen.h"
@@ -778,6 +779,7 @@ void dt_gui_preferences_show()
 #ifdef USE_LUA
   init_tab_lua(_preferences_dialog, stack);
 #endif
+  init_tab_mcp(_preferences_dialog, stack);
 
   gtk_widget_show_all(_preferences_dialog);
 

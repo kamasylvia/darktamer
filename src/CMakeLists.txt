@@ -207,6 +207,9 @@ FILE(GLOB SOURCE_FILES
 
 FILE(GLOB HEADER_FILES "*.h" "common/*.h" "external/OpenCL/CL/*.h" "control/*.h" "iop/*.h" "libs/*.h" "views/*.h")
 
+list(APPEND SOURCE_FILES "gui/preferences_mcp.c")
+list(APPEND HEADER_FILES "gui/preferences_mcp.h")
+
 if(APPLE)
   list(APPEND SOURCE_FILES "osx/osx.mm")
   list(APPEND HEADER_FILES "osx/osx.h")

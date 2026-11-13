@@ -36,6 +36,15 @@ void dt_mcp_gui_server_start(const char *socket_override);
 /** tear everything down; safe to call when never started */
 void dt_mcp_gui_server_stop(void);
 
+/** absolute path of the darktable-mcp connector beside this binary
+    (g_free the result); falls back to the bare command for PATH lookup */
+gchar *dt_mcp_gui_bridge_path(void);
+
+/** the standard mcpServers client block for connecting to this instance,
+    with the current socket and bridge path filled in (g_free the result);
+    shown in the AI preferences tab and written to mcp-client-config.json */
+gchar *dt_mcp_gui_client_config_json(void);
+
 /** the fall-back socket path, $XDG_RUNTIME_DIR/darktable-mcp.sock or a tmpdir
     equivalent (g_free the result). conf-free, so the --bridge connector can
     call it before any darktable init; the server start itself prefers the

@@ -118,3 +118,31 @@ gboolean dt_bridge_export_images(const char *in_path, int imgid_in,
                                  gboolean upscale, gboolean high_quality,
                                  void *written_paths, void *skipped_paths,
                                  char **err);
+
+// --- live GUI bridge (the in-GUI server's tools; no-ops headless) ---
+
+/** the imgid the darkroom view is showing, NO_IMGID when none is open */
+int32_t dt_bridge_open_image(void);
+
+/** JSON { imgid, path, view } for what the GUI is showing; imgid is null
+    when the darkroom has nothing loaded */
+char *dt_bridge_open_image_json(char **err);
+
+/** which image a request targets, from its path/imgid arguments; NO_IMGID
+    when neither resolves to a catalog row. read-only, any thread */
+int32_t dt_bridge_route_imgid(const char *path, int imgid_in);
+
+/** apply stack entries to the live darkroom develop; every entry commits via
+    dt_dev_add_history_item() so the canvas shows it immediately. GUI thread
+    only (the server routes it there) */
+gboolean dt_bridge_apply_stack_open(void *stack_jsonarray,
+                                    gboolean disable_tone_mappers, char **err);
+
+/** apply stack entries to an image the GUI is not showing, via a throwaway
+    develop that writes history + sidecar; same as the headless path */
+gboolean dt_bridge_apply_stack_library(int imgid, void *stack_jsonarray,
+                                       gboolean disable_tone_mappers, char **err);
+
+/** open an image in the GUI darkroom by imgid or catalog path; refuses to
+    import anything new */
+gboolean dt_bridge_gui_open_image(const char *path, int imgid_in, char **err);

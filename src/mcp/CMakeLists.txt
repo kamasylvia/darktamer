@@ -3,11 +3,11 @@ include_directories(${DARKTABLE_BINDIR})
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(JSON_GLIB REQUIRED json-glib-1.0)
 
+# the transport/tool/bridge layers compile into lib_darktable (the in-GUI
+# server shares them); this binary is the headless entry point, plus the
+# --bridge connector to a running GUI's socket
 add_executable(darktable-mcp
-  main.c
-  mcp_jsonrpc.c
-  mcp_tools.c
-  dt_bridge.c)
+  main.c)
 
 set_target_properties(darktable-mcp PROPERTIES LINKER_LANGUAGE C)
 

@@ -18,6 +18,7 @@
 
 #include "mcp/mcp_tools.h"
 #include "mcp/dt_bridge.h"
+#include "common/darktable.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -493,6 +494,132 @@ static JsonNode *_tool_export_images(JsonObject *args)
 }
 
 // ---------------------------------------------------------------------------
+// live GUI tools
+// ---------------------------------------------------------------------------
+
+static JsonNode *_tool_get_open_image(JsonObject *args)
+{
+  (void)args;
+  char *err = NULL;
+  char *json = dt_bridge_open_image_json(&err);
+  if(!json)
+  { JsonNode *r = _text_result(err ? err : "error", TRUE); g_free(err); return r; }
+  JsonNode *r = _text_result(json, FALSE);
+  g_free(json);
+  return r;
+}
+
+static JsonNode *_tool_open_image(JsonObject *args)
+{
+  const char *path = _arg_string(args, "path");
+  const int imgid = _arg_int(args, "imgid", 0);
+  if(!path && imgid <= 0)
+    return _text_result("open_image: requires 'imgid' or 'path' (must already"
+                        " be in the catalog; import it first)", TRUE);
+  char *err = NULL;
+  if(!dt_bridge_gui_open_image(path, imgid, &err))
+  { JsonNode *r = _text_result(err ? err : "error", TRUE); g_free(err); return r; }
+  // the switch is asynchronous enough that the caller wants to know what the
+  // darkroom ended up with
+  char *json = dt_bridge_open_image_json(&err);
+  if(!json)
+  { JsonNode *r = _text_result("{\"ok\":true}", FALSE); g_free(err); return r; }
+  JsonNode *r = _text_result(json, FALSE);
+  g_free(json);
+  return r;
+}
+
+// the edit tool of the live workflow: stack entries on the open image commit
+// through the darkroom's own path and show on the canvas immediately; on any
+// other image they write the library the way the headless server does
+static JsonNode *_tool_apply_stack(JsonObject *args)
+{
+  JsonArray *stack = _arg_array(args, "stack");
+  if(!stack) return _text_result("missing required array argument 'stack'", TRUE);
+  const gboolean dtm = _arg_bool(args, "disable_tone_mappers", FALSE);
+
+  const char *path = NULL;
+  int imgid = 0;
+  _parse_image_input(args, &path, &imgid);
+  if(imgid <= 0) imgid = _arg_int(args, "imgid", 0);
+
+  const dt_imgid_t open = dt_bridge_open_image();
+  dt_imgid_t target = dt_bridge_route_imgid(path, imgid);
+  if(!dt_is_valid_imgid(target)) target = open;   // no target given: the open one
+  if(!dt_is_valid_imgid(target))
+    return _text_result("no image open in the GUI and none given; pass"
+                        " input.imgid", TRUE);
+
+  char *err = NULL;
+  gboolean ok;
+  if(target == open)
+    ok = dt_bridge_apply_stack_open(stack, dtm, &err);
+  else
+    ok = dt_bridge_apply_stack_library(target, stack, dtm, &err);
+  if(!ok)
+  { JsonNode *r = _text_result(err ? err : "error", TRUE); g_free(err); return r; }
+
+  char msg[64];
+  g_snprintf(msg, sizeof(msg), "{\"ok\":true,\"imgid\":%d}", target);
+  return _text_result(msg, FALSE);
+}
+
+// TRUE when a request names the image the darkroom is showing. the GUI server
+// runs such requests on the GUI thread so they go through the live develop;
+// everything else runs off-thread. reading darktable.view_manager from the
+// reader thread races benignly on a pointer the GUI only ever replaces
+gboolean mcp_tools_targets_open(const char *name, JsonObject *args)
+{
+  if(!name) return FALSE;
+
+  // these drive the GUI itself and always take the GUI thread
+  if(!strcmp(name, "get_open_image") || !strcmp(name, "open_image")) return TRUE;
+
+  // apply_stack defaults to the open image when no target is given
+  if(!strcmp(name, "apply_stack"))
+  {
+    if(!dt_is_valid_imgid(dt_bridge_open_image())) return FALSE;
+    const char *path = NULL;
+    int imgid = 0;
+    _parse_image_input(args, &path, &imgid);
+    if(imgid <= 0) imgid = _arg_int(args, "imgid", 0);
+    const dt_imgid_t t = dt_bridge_route_imgid(path, imgid);
+    return !dt_is_valid_imgid(t) || t == dt_bridge_open_image();
+  }
+
+  // these take the GUI thread only when they target the open image
+  static const char *const routed[] = { "get_history", "reset_history",
+    "apply_style", "save_style", "render", "image_stats", "export_images", NULL };
+  gboolean matched = FALSE;
+  for(int i = 0; routed[i]; i++)
+    if(!strcmp(name, routed[i])) { matched = TRUE; break; }
+  if(!matched) return FALSE;
+
+  const dt_imgid_t open = dt_bridge_open_image();
+  if(!dt_is_valid_imgid(open)) return FALSE;
+
+  const char *path = NULL;
+  int imgid = 0;
+  _parse_image_input(args, &path, &imgid);
+  if(imgid <= 0) imgid = _arg_int(args, "imgid", 0);
+  if(dt_bridge_route_imgid(path, imgid) == open) return TRUE;
+  JsonArray *ids = _arg_array(args, "imgids");
+  if(ids)
+  {
+    const guint n = json_array_get_length(ids);
+    for(guint i = 0; i < n; i++)
+    {
+      JsonNode *en = json_array_get_element(ids, i);
+      if(JSON_NODE_HOLDS_VALUE(en)
+         && json_node_get_value_type(en) == G_TYPE_INT64
+         && (dt_imgid_t)json_node_get_int(en) == open)
+        return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+// ---------------------------------------------------------------------------
 // registry
 // ---------------------------------------------------------------------------
 
@@ -528,6 +655,9 @@ static const mcp_handler_t _handlers[] = {
   { "get_conf",         _tool_get_conf },
   { "list_conf",        _tool_list_conf },
   { "export_images",    _tool_export_images },
+  { "get_open_image",   _tool_get_open_image },
+  { "open_image",       _tool_open_image },
+  { "apply_stack",      _tool_apply_stack },
 };
 static const size_t _n_handlers = sizeof(_handlers) / sizeof(_handlers[0]);
 

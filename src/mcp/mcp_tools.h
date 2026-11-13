@@ -30,3 +30,9 @@ JsonNode *mcp_tools_list_node(void);
 /** dispatch a `tools/call`, returning an MCP tool result { content, isError }
     if `name` is unknown, sets *found = FALSE and returns NULL */
 JsonNode *mcp_tools_call_node(const char *name, JsonObject *arguments, gboolean *found);
+
+/** TRUE when a request must run on the GUI thread: the tools that drive the
+    GUI itself, and every edit or inspection whose target is the image the
+    darkroom is currently showing. the in-GUI server routes on this; headless
+    callers never need it */
+gboolean mcp_tools_targets_open(const char *name, JsonObject *arguments);

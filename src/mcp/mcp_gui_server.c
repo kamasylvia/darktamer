@@ -23,6 +23,7 @@
 #include "mcp/dt_bridge.h"
 
 #include "common/darktable.h"
+#include "common/file_location.h"
 #include "control/conf.h"
 
 #include <gio/gio.h>
@@ -30,6 +31,7 @@
 #include <json-glib/json-glib.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
 
 #ifdef G_OS_UNIX
 #include <gio/gunixsocketaddress.h>
@@ -460,6 +462,59 @@ static void _mcp_gui_close_connection(void)
   dt_print(DT_DEBUG_CONTROL, "[mcp] client disconnected");
 }
 
+// the agent side of the toggle: a ready stdio client configuration next to
+// this program, so "how do I connect" is a file on disk instead of prose in
+// a manual. the bridge sits beside the main binary
+static void _write_client_config(void)
+{
+  gchar configdir[PATH_MAX] = { 0 };
+  dt_loc_get_user_config_dir(configdir, sizeof(configdir));
+  if(!configdir[0]) return;
+
+  gchar bridge[PATH_MAX] = { 0 };
+  if(darktable.restart_argv && darktable.restart_argv[0])
+  {
+    gchar *dir = g_path_get_dirname(darktable.restart_argv[0]);
+    g_snprintf(bridge, sizeof(bridge), "%s%cdarktable-mcp", dir, G_DIR_SEPARATOR);
+    g_free(dir);
+  }
+  if(!bridge[0] || !g_file_test(bridge, G_FILE_TEST_EXISTS))
+  {
+    // path unknown or stale: leave the command bare and let the client's
+    // PATH resolve it
+    g_strlcpy(bridge, "darktable-mcp", sizeof(bridge));
+  }
+
+  gchar *path = g_build_filename(configdir, "mcp-client-config.json", NULL);
+  gchar *json = g_strdup_printf(
+    "{\n"
+    "  \"_comment\": \"MCP client configuration for the running darktable;"
+    " point the client's stdio config at the darktable entry below, or copy"
+    " it into the client's config file. the server runs while the AI tab's"
+    " agent server toggle is on.\",\n"
+    "  \"bridge_command\": \"%s\",\n"
+    "  \"socket\": \"%s\",\n"
+    "  \"mcpServers\": {\n"
+    "    \"darktable\": {\n"
+    "      \"command\": \"%s\",\n"
+    "      \"args\": [\"--bridge\", \"--socket\", \"%s\"]\n"
+    "    }\n"
+    "  }\n"
+    "}\n",
+    bridge, S.path, bridge, S.path);
+  GError *e = NULL;
+  if(!g_file_set_contents(path, json, -1, &e))
+  {
+    fprintf(stderr, "darktable: could not write %s: %s\n", path,
+            e ? e->message : "?");
+    if(e) g_error_free(e);
+  }
+  else
+    dt_print(DT_DEBUG_CONTROL, "[mcp] client config written to %s", path);
+  g_free(json);
+  g_free(path);
+}
+
 void dt_mcp_gui_server_start(const char *socket_override)
 {
   // the watcher is unconditional: with the toggle off the server must not
@@ -513,6 +568,7 @@ void dt_mcp_gui_server_start(const char *socket_override)
   S.worker = g_thread_new("darktable-mcp", _worker_thread, NULL);
   S.running = TRUE;
   dt_bridge_set_read_only(dt_conf_get_bool("plugins/mcp/read_only"));
+  _write_client_config();
   dt_print(DT_DEBUG_CONTROL, "[mcp] GUI server listening on %s", S.path);
 #else
   (void)socket_override;

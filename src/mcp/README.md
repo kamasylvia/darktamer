@@ -113,12 +113,29 @@ darktable --mcp --mcp-socket PATH   # custom socket (default below)
 ```
 
 `--mcp` sets the `plugins/mcp/gui_server` conf key, so the preference dialog
-(miscellaneous → AI agent server) can enable it permanently instead — toggling
-that preference starts and stops the server immediately, no restart needed.
-The server
+(preferences → **AI** → agent server (MCP)) can enable it permanently instead —
+toggling that preference starts and stops the server immediately, no restart
+needed. The server
 listens on a unix socket at `$XDG_RUNTIME_DIR/darktable-mcp.sock` (tmpdir
 fallback; `plugins/mcp/gui_socket` overrides). `plugins/mcp/read_only` is the
 in-GUI counterpart of `--read-only`, and applies live as well.
+
+When the server starts it writes a ready-made MCP client configuration to
+`mcp-client-config.json` in darktable's config folder — a standard
+`mcpServers` block pointing at the bridge connector beside this very binary
+with the matching socket. Point your client at that file (or copy the block
+into its config) and the session lands in the running GUI:
+
+```json
+{
+  "mcpServers": {
+    "darktable": {
+      "command": "/Applications/Darktamer.app/Contents/MacOS/darktable-mcp",
+      "args": ["--bridge", "--socket", "/tmp/dt-mcp.sock"]
+    }
+  }
+}
+```
 
 MCP clients speak stdio, so a session connects through the bridge connector —
 a byte pump between a client and that socket, no darktable init involved:

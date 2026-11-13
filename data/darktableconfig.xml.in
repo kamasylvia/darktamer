@@ -4695,7 +4695,7 @@
     <type>bool</type>
     <default>false</default>
     <shortdescription>serve MCP tools from the running GUI</shortdescription>
-    <longdescription>listen on a unix socket and answer the darktable-mcp protocol inside this instance; edits to the image open in the darkroom apply live. darktable --mcp sets this for one run</longdescription>
+    <longdescription>listen on a unix socket and answer the darktable-mcp protocol inside this instance; edits to the image open in the darkroom apply live. toggling this preference starts and stops the server right away, no restart needed. darktable --mcp sets this for one run</longdescription>
   </dtconfig>
   <dtconfig prefs="misc" section="mcp">
     <name>plugins/mcp/gui_socket</name>

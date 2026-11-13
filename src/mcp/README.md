@@ -113,10 +113,12 @@ darktable --mcp --mcp-socket PATH   # custom socket (default below)
 ```
 
 `--mcp` sets the `plugins/mcp/gui_server` conf key, so the preference dialog
-(miscellaneous → AI agent server) can enable it permanently instead. The server
+(miscellaneous → AI agent server) can enable it permanently instead — toggling
+that preference starts and stops the server immediately, no restart needed.
+The server
 listens on a unix socket at `$XDG_RUNTIME_DIR/darktable-mcp.sock` (tmpdir
 fallback; `plugins/mcp/gui_socket` overrides). `plugins/mcp/read_only` is the
-in-GUI counterpart of `--read-only`.
+in-GUI counterpart of `--read-only`, and applies live as well.
 
 MCP clients speak stdio, so a session connects through the bridge connector —
 a byte pump between a client and that socket, no darktable init involved:

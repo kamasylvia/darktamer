@@ -69,6 +69,29 @@ typedef struct _mcp_gui_t
 
 static _mcp_gui_t S;
 
+// id of the preference watcher (kept outside S: stop() resets that struct)
+static guint _watch_id = 0;
+
+// the preference toggle must take effect without a restart. darktable has no
+// conf-change listener, so watch the key on a slow poll; both start and stop
+// are idempotent and this callback runs on the default context, i.e. the GUI
+// thread, where the whole lifecycle is meant to run
+static gboolean _conf_watch(gpointer user)
+{
+  (void)user;
+  // read-only applies to every request, so refresh it on every beat
+  dt_bridge_set_read_only(dt_conf_get_bool("plugins/mcp/read_only"));
+  const gboolean want = dt_conf_get_bool("plugins/mcp/gui_server");
+  if(want && !S.running)
+    dt_mcp_gui_server_start(NULL);
+  else if(!want && S.running)
+  {
+    dt_print(DT_DEBUG_CONTROL, "[mcp] GUI server disabled in preferences");
+    dt_mcp_gui_server_stop();
+  }
+  return TRUE;   // keep watching
+}
+
 // the fall-back socket path, with no conf access: the --bridge connector
 // calls this before any darktable init, so it must stay pure
 gchar *dt_mcp_gui_server_default_path(void)
@@ -439,6 +462,12 @@ static void _mcp_gui_close_connection(void)
 
 void dt_mcp_gui_server_start(const char *socket_override)
 {
+  // the watcher is unconditional: with the toggle off the server must not
+  // run, but it must still observe the preference so ticking the box takes
+  // effect without a restart
+  if(!_watch_id)
+    _watch_id = g_timeout_add_seconds(2, _conf_watch, NULL);
+
   if(!dt_conf_get_bool("plugins/mcp/gui_server"))
   {
     dt_print(DT_DEBUG_CONTROL, "[mcp] GUI server disabled (plugins/mcp/gui_server off)");

@@ -2331,7 +2331,7 @@ static void _lib_import_from_callback(GtkWidget *widget, dt_lib_module_t* self)
     {
       const gboolean understood = dt_gui_show_standalone_yes_no_dialog
         (_("import base directory"),
-         _("before copying images to the darktable base directory make sure it is defined as you prefer."
+         _("before copying images to the Darktamer base directory make sure it is defined as you prefer."
            "\nfurther information can be found in the darktable manual."
            "\n\ninspect darktable preferences -> import."
            "\ncheck and possibly correct the 'base directory naming pattern'"),

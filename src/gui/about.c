@@ -29,7 +29,6 @@ void darktable_show_about_dialog()
 #ifdef GDK_WINDOWING_QUARTZ
   dt_osx_disallow_fullscreen(dialog);
 #endif
-  gtk_about_dialog_set_program_name(GTK_ABOUT_DIALOG(dialog), PACKAGE_NAME);
   gtk_about_dialog_set_version(GTK_ABOUT_DIALOG(dialog), darktable_package_version);
   char *copyright = g_strdup_printf(_("copyright (c) the authors 2009-%s"),
                                     darktable_last_commit_year);
@@ -37,15 +36,32 @@ void darktable_show_about_dialog()
   g_free(copyright);
   gtk_about_dialog_set_comments(GTK_ABOUT_DIALOG(dialog),
                                 _("organize and develop images from digital cameras"));
-  gtk_about_dialog_set_website(GTK_ABOUT_DIALOG(dialog), "https://www.darktable.org/");
+  gtk_about_dialog_set_program_name(GTK_ABOUT_DIALOG(dialog), "Darktamer");
+  gtk_about_dialog_set_website(GTK_ABOUT_DIALOG(dialog),
+                               "https://github.com/kamasylvia/darktamer");
   gtk_about_dialog_set_website_label(GTK_ABOUT_DIALOG(dialog), "website");
+  // the fork's own branding: load the logo from pixmaps instead of the
+  // upstream "darktable" icon theme name
   const dt_logo_season_t season = dt_util_get_logo_season();
   char *icon;
   if(season != DT_LOGO_SEASON_NONE)
-    icon = g_strdup_printf("darktable-%d", (int)season);
+    icon = g_strdup_printf("idbutton-%d-hd.png", (int)season);
   else
-    icon = g_strdup("darktable");
-  gtk_about_dialog_set_logo_icon_name(GTK_ABOUT_DIALOG(dialog), icon);
+    icon = g_strdup("idbutton-hd.png");
+  char *logo_path = g_build_filename(darktable.datadir, "pixmaps", icon, (gchar *)NULL);
+  GError *logo_error = NULL;
+  GdkPixbuf *logo = gdk_pixbuf_new_from_file(logo_path, &logo_error);
+  if(logo)
+  {
+    gtk_about_dialog_set_logo(GTK_ABOUT_DIALOG(dialog), logo);
+    g_object_unref(logo);
+  }
+  else
+  {
+    gtk_about_dialog_set_logo_icon_name(GTK_ABOUT_DIALOG(dialog), "darktable");
+    g_error_free(logo_error);
+  }
+  g_free(logo_path);
   g_free(icon);
 
   const char *str = _("all those of you that made previous releases possible");

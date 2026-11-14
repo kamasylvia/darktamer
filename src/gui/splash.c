@@ -74,7 +74,7 @@ static GtkWidget *_get_program_name()
   // get the darktable name in special font
   GtkWidget *program_name = NULL;
   gchar *image_file =
-    g_strdup_printf("%s/pixmaps/darktable.svg", darktable.datadir);
+    g_strdup_printf("%s/pixmaps/darktamer.svg", darktable.datadir);
   GdkPixbuf *prog_name_image =
     gdk_pixbuf_new_from_file_at_size(image_file, PROGNAME_SIZE, -1, NULL);
   g_free(image_file);
@@ -85,7 +85,7 @@ static GtkWidget *_get_program_name()
     g_object_unref(prog_name_image);
   }
   else
-    program_name = GTK_WIDGET(gtk_label_new("darktable"));
+    program_name = GTK_WIDGET(gtk_label_new("darktamer"));
 
   gtk_widget_set_name(program_name, "splashscreen-program");
   return program_name;

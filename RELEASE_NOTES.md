@@ -182,6 +182,11 @@ changes (where available).
   are now settable by name, and module listings carry display names and
   aliases so the framing module can be found as "framing".
 
+- The UI is now branded Darktamer: the splash and welcome screens, the
+  header bar and window title, the about dialog (name, website, and a
+  recolored Darktamer aperture logo instead of the darktable one), and
+  the toolbox about popup all carry the fork's own name and logo.
+
 - Added an interactive editing mode allowing users to correct a color
   by selecting it directly on the photo with the mouse wheel, just as
   was already possible with the "tone equalizer" module.

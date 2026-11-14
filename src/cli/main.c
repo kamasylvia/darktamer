@@ -399,7 +399,7 @@ int main(int argc, char *arg[])
         library = arg[k];
         if(!strcmp(library, ":memory:"))
         {
-          fprintf(stderr, _("empty in-memory library is useless for darktable cli export\n"));
+          fprintf(stderr, _("empty in-memory library is useless for Darktamer cli export\n"));
           usage(arg[0]);
           exit(1);
         }

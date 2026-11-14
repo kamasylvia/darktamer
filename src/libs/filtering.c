@@ -971,7 +971,7 @@ static gboolean _rule_show_popup(GtkWidget *widget,
   g_object_unref(section);
 
   section = g_menu_new();
-  g_menu_append_section(menu, _("darktable"), G_MENU_MODEL(section));
+  g_menu_append_section(menu, _("Darktamer"), G_MENU_MODEL(section));
   ADD_COLLECT_ENTRY(section, DT_COLLECTION_PROP_GROUP_ID);
   ADD_COLLECT_ENTRY(section, DT_COLLECTION_PROP_DUPLICATES);
   ADD_COLLECT_ENTRY(section, DT_COLLECTION_PROP_LOCAL_COPY);
@@ -1037,7 +1037,7 @@ static void _populate_rules_combo(GtkWidget *w)
   ADD_COLLECT_ENTRY(DT_COLLECTION_PROP_METERING_MODE);
   ADD_COLLECT_ENTRY(DT_COLLECTION_PROP_DIMENSIONS);
 
-  dt_bauhaus_combobox_add_section(w, _("darktable"));
+  dt_bauhaus_combobox_add_section(w, _("Darktamer"));
   ADD_COLLECT_ENTRY(DT_COLLECTION_PROP_GROUP_ID);
   ADD_COLLECT_ENTRY(DT_COLLECTION_PROP_DUPLICATES);
   ADD_COLLECT_ENTRY(DT_COLLECTION_PROP_LOCAL_COPY);
@@ -2036,7 +2036,7 @@ static gboolean _sort_init(_widgets_sort_t *sort, const dt_collection_sort_t sor
     dt_bauhaus_combobox_add_introspection(sort->sort, ac, _collection_sort_names, DT_COLLECTION_SORT_DATETIME, DT_COLLECTION_SORT_PRINT_TIMESTAMP);
     dt_bauhaus_combobox_add_section(sort->sort, _("metadata"));
     dt_bauhaus_combobox_add_introspection(sort->sort, ac, _collection_sort_names, DT_COLLECTION_SORT_RATING, DT_COLLECTION_SORT_DESCRIPTION);
-    dt_bauhaus_combobox_add_section(sort->sort, _("darktable"));
+    dt_bauhaus_combobox_add_section(sort->sort, _("Darktamer"));
     dt_bauhaus_combobox_add_introspection(sort->sort, ac, _collection_sort_names, DT_COLLECTION_SORT_GROUP, DT_COLLECTION_SORT_SHUFFLE);
 
     /* reverse order checkbutton */

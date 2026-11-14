@@ -615,7 +615,7 @@ cairo_surface_t *dt_util_get_logo(const float size)
 
 cairo_surface_t *dt_util_get_logo_text(const float size)
 {
-  return _util_get_svg_img(g_strdup("dt_text.svg"), size);
+  return _util_get_svg_img(g_strdup("darktamer_text.svg"), size);
 }
 
 // the following two functions (dt_util_latitude_str and

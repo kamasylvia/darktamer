@@ -177,7 +177,7 @@ char *dt_lib_export_metadata_configuration_dialog(char *metadata_presets, const 
   GtkWidget *exiftag = gtk_check_button_new_with_label(_("EXIF data"));
   gtk_widget_set_tooltip_text(exiftag, _("export EXIF metadata"));
   GtkWidget *dtmetadata = gtk_check_button_new_with_label(_("metadata"));
-  gtk_widget_set_tooltip_text(dtmetadata, _("export darktable XMP metadata (from metadata editor module)"));
+  gtk_widget_set_tooltip_text(dtmetadata, _("export Darktamer XMP metadata (from metadata editor module)"));
 
   GtkWidget *calculated;
   if(!ondisk)
@@ -211,7 +211,7 @@ char *dt_lib_export_metadata_configuration_dialog(char *metadata_presets, const 
   GtkWidget *hierarchical = gtk_check_button_new_with_label(_("hierarchical tags"));
   gtk_widget_set_tooltip_text(hierarchical, _("export hierarchical tags (to Xmp.lr.Hierarchical Subject)"));
   GtkWidget *dthistory = gtk_check_button_new_with_label(_("develop history"));
-  gtk_widget_set_tooltip_text(dthistory, _("export darktable development data (recovery purpose in case of loss of database or XMP file)"));
+  gtk_widget_set_tooltip_text(dthistory, _("export Darktamer development data (recovery purpose in case of loss of database or XMP file)"));
 
   // specific rules
   GtkTreeView *view = d->view = GTK_TREE_VIEW(gtk_tree_view_new());

@@ -1002,7 +1002,7 @@ void expose(dt_view_t *self,
         break;
       default:
         load_txt = g_strdup_printf(
-          _("darktable could not load `%s', switching to lighttable now.\n\n"
+          _("Darktamer could not load `%s', switching to lighttable now.\n\n"
             "please check that the camera model that produced the image is supported in darktable\n"
             "(list of supported cameras is at https://www.darktable.org/resources/camera-support/).\n"
             "if you are sure that the camera model is supported, please consider opening an issue\n"
@@ -6040,7 +6040,7 @@ static void _darkroom_display_second_window(dt_develop_t *dev)
     _second_window_configure_ppd_dpi(dev);
 
     gtk_window_set_icon_name(GTK_WINDOW(dev->second_wnd), "darktable");
-    gtk_window_set_title(GTK_WINDOW(dev->second_wnd), _("darktable - darkroom preview"));
+    gtk_window_set_title(GTK_WINDOW(dev->second_wnd), _("Darktamer - darkroom preview"));
 
 #ifndef GDK_WINDOWING_QUARTZ
     // On macOS, transient_for is implemented via [NSWindow addChildWindow:ordered:],

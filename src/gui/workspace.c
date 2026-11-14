@@ -657,7 +657,7 @@ static gboolean _workspace_show_dialog(const char *datadir)
   GtkDialogFlags flags = GTK_DIALOG_DESTROY_WITH_PARENT;
 #endif
   session->db_screen =
-    gtk_dialog_new_with_buttons(_("darktable - select a workspace"),
+    gtk_dialog_new_with_buttons(_("Darktamer - select a workspace"),
                                 NULL, flags,
                                 NULL,
                                 GTK_RESPONSE_NONE,

@@ -425,7 +425,7 @@ void dt_control_quit()
   if(dt_control_jobs_pending() > 1)
   {
     dt_control_log("<span foreground='#FF0000' background='#000000'>%s</span>",
-                   _("darktable will be locked until background work has been done"));
+                   _("Darktamer will be locked until background work has been done"));
   }
 
   for(int i = 0; i < 50 && (dt_control_jobs_pending() > 1); i++)

@@ -1727,7 +1727,7 @@ static void _topbar_populate_rules_combo(GtkWidget *w, dt_lib_filtering_t *d)
   // if we have not added any entry, remove the section
   if(nb == dt_bauhaus_combobox_length(w)) dt_bauhaus_combobox_remove_at(w, nb - 1);
 
-  dt_bauhaus_combobox_add_section(w, _("darktable"));
+  dt_bauhaus_combobox_add_section(w, _("Darktamer"));
   nb = dt_bauhaus_combobox_length(w);
   ADD_COLLECT_ENTRY(DT_COLLECTION_PROP_GROUP_ID);
   ADD_COLLECT_ENTRY(DT_COLLECTION_PROP_DUPLICATES);

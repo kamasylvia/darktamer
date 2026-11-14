@@ -118,8 +118,8 @@ static dt_gtkentry_completion_spec _default_path_compl_list[]
       { "CATEGORY[,]", N_("$(CATEGORY[n,category]) - subtag of level n in hierarchical tags") },
       { "CATEGORY_EACH[,]", N_("$(CATEGORY_EACH[n,category]) - level-n subtag of each matching tag, one path per tag") },
       { "TAGS", N_("$(TAGS) - tags as set in metadata settings") },
-      { "DARKTABLE.NAME", N_("$(DARKTABLE.NAME) - darktable name") },
-      { "DARKTABLE.VERSION", N_("$(DARKTABLE.VERSION) - current darktable version") },
+      { "DARKTABLE.NAME", N_("$(DARKTABLE.NAME) - Darktamer name") },
+      { "DARKTABLE.VERSION", N_("$(DARKTABLE.VERSION) - current Darktamer version") },
       { "SIDECAR_TXT", N_("$(SIDECAR_TXT) - contents of .txt sidecar file, if present") },
       { "WORKSPACE.LABEL", N_("$(WORKSPACE.LABEL) - label of the current workspace") },
       { NULL, NULL } };

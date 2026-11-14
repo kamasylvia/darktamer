@@ -1487,7 +1487,7 @@ static gboolean _verify_repository(GtkWindow *parent, const char *repository)
   // what it means while the user is making it
   return dt_gui_show_yes_no_dialog(
     _("add this repository?"), "ai_add_repository",
-    _("%s offers %d model(s) for this version of darktable\n\n"
+    _("%s offers %d model(s) for this version of Darktamer\n\n"
       "it is not maintained or reviewed by the darktable project, and a "
       "model installed from it replaces any installed model of the same "
       "name"),
@@ -2233,7 +2233,7 @@ static void _show_ort_probe_result(GtkWindow *parent, const char *path, const ch
     dlg = gtk_message_dialog_new(parent,
       GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
       GTK_MESSAGE_INFO, GTK_BUTTONS_OK,
-      _("ONNX Runtime %s detected.\nRestart darktable to apply."), version);
+      _("ONNX Runtime %s detected.\nRestart Darktamer to apply."), version);
   else
     dlg = gtk_message_dialog_new(parent,
       GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
@@ -2281,7 +2281,7 @@ static void _on_detect_system_ort(GtkButton *button, gpointer user_data)
       GTK_WINDOW(data->parent_dialog),
       GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
       GTK_MESSAGE_INFO, GTK_BUTTONS_OK,
-      _("ONNX Runtime %s [%s]\n%s\n\nRestart darktable to apply."),
+      _("ONNX Runtime %s [%s]\n%s\n\nRestart Darktamer to apply."),
       f->version, f->eps, f->path);
     dt_gui_dialog_run(GTK_DIALOG(dlg));
     gtk_widget_destroy(dlg);

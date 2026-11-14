@@ -298,7 +298,7 @@ static void _fullscreen_key_accel_callback(dt_action_t *action)
   gtk_window_set_title(GTK_WINDOW(widget),
                        widget == dt_ui_main_window(darktable.gui->ui)
                        ? "darktable"
-                       : _("darktable - darkroom preview"));
+                       : _("Darktamer - darkroom preview"));
 #endif
 }
 

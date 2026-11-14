@@ -1742,10 +1742,10 @@ static sf_sim_t *_ensure_sim(dt_iop_spektrafilm_data_t *d,
          what to do about it there, and keep the detail for -d dev. */
       const char *msg =
           status == SF_PACK_ERR_TOO_NEW
-              ? _("this data pack was made for a newer version of darktable\n"
+              ? _("this data pack was made for a newer version of Darktamer\n"
                   "update darktable to use it")
           : status == SF_PACK_ERR_TOO_OLD
-              ? _("this data pack is too old for this version of darktable\n"
+              ? _("this data pack is too old for this version of Darktamer\n"
                   "use the download button to fetch a current one")
               : _("the data pack could not be read\n"
                   "it may have downloaded incompletely -- use the download button"

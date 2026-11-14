@@ -1961,7 +1961,7 @@ char *dt_ai_models_download_sync(const char *model_id,
     {
       char *dt_ver = _get_darktable_version_prefix();
       char *err = g_strdup_printf(
-        _("no compatible ai model release found for darktable %s"),
+        _("no compatible ai model release found for Darktamer %s"),
         dt_ver ? dt_ver : darktable_package_version);
       g_free(dt_ver);
       SET_STATUS_AND_RETURN(DT_AI_MODEL_ERROR, err);
@@ -2465,7 +2465,7 @@ GList *dt_ai_models_fetch_repository_list(const char *requested,
       {
         char *dt_ver = _get_darktable_version_prefix();
         *error_msg = g_strdup_printf(
-          _("no compatible ai model release found for darktable %s"),
+          _("no compatible ai model release found for Darktamer %s"),
           dt_ver ? dt_ver : darktable_package_version);
         g_free(dt_ver);
       }

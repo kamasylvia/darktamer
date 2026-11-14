@@ -1325,9 +1325,9 @@ static gpointer _fetch_worker(gpointer data)
        against another repository or ref */
     char why[256];
     if(unsupported_fmt > SF_PACK_FORMAT_MAX)
-      g_strlcpy(why, _("that data pack needs a newer darktable"), sizeof(why));
+      g_strlcpy(why, _("that data pack needs a newer Darktamer"), sizeof(why));
     else if(unsupported_fmt)
-      g_strlcpy(why, _("that data pack is too old for this darktable -- "
+      g_strlcpy(why, _("that data pack is too old for this Darktamer -- "
                        "the data repository needs re-exporting"), sizeof(why));
     else if(wanted_pack)
       g_snprintf(why, sizeof(why), _("data pack %08x is not published in %s at %s"),

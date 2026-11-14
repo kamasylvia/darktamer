@@ -1836,7 +1836,7 @@ static void _lib_import_select_folder(GtkWidget *widget,
   // run the native dialog
   dt_conf_get_folder_to_file_chooser("ui_last/import_last_place",
                                      GTK_FILE_CHOOSER(filechooser));
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
   {
     char *dirname = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(filechooser));
     _add_custom_place(dirname, self);
@@ -1949,7 +1949,7 @@ static void _browse_basedir_clicked(GtkWidget *widget,
   if(c) *c = '\0';
   gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(filechooser), old);
   g_free(old);
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
   {
     gchar *dir = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(filechooser));
 

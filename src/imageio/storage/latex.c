@@ -151,7 +151,7 @@ static void button_clicked(GtkWidget *widget, dt_imageio_module_storage_t *self)
   if(c) *c = '\0';
   gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(filechooser), old);
   g_free(old);
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
   {
     gchar *dir = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(filechooser));
     char *composed = g_build_filename(dir, "$(FILE_NAME)", NULL);

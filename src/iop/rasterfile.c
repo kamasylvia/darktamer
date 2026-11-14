@@ -454,7 +454,7 @@ static void _select_folder_file(dt_iop_module_t *self)
   }
 
   GtkFileChooserNative *filechooser = _mask_file_chooser(mfolder);
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
   {
     gchar *filepath = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(filechooser));
     const gboolean within = (strlen(filepath) > strlen(mfolder))
@@ -491,7 +491,7 @@ static void _import_file(dt_iop_module_t *self)
   GtkFileChooserNative *filechooser = _mask_file_chooser(mfolder);
   g_free(mfolder);
 
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
   {
     gchar *filepath = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(filechooser));
     int width = 0, height = 0, bpc = 8;

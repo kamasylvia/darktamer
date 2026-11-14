@@ -179,7 +179,7 @@ static void _on_browse_dir_clicked(GtkWidget *btn, gpointer data)
     gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(fc), old);
   g_free(old);
 
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(fc)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(fc)) == GTK_RESPONSE_ACCEPT)
   {
     gchar *dir = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(fc));
     // Escape backslashes (needed on Windows; harmless elsewhere).

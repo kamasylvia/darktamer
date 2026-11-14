@@ -2387,7 +2387,7 @@ void dt_control_move_images()
         _("_select as destination"), _("_cancel"));
 
   dt_conf_get_folder_to_file_chooser("ui_last/move_path", GTK_FILE_CHOOSER(filechooser));
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
   {
     dir = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(filechooser));
     dt_conf_set_folder_from_file_chooser("ui_last/move_path",
@@ -2446,7 +2446,7 @@ void dt_control_copy_images()
 
   dt_conf_get_folder_to_file_chooser("ui_last/copy_path",
                                      GTK_FILE_CHOOSER(filechooser));
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
   {
     dir = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(filechooser));
     dt_conf_set_folder_from_file_chooser("ui_last/copy_path",

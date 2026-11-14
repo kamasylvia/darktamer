@@ -1392,7 +1392,7 @@ static void import_preset(GtkButton *button,
 
   gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(chooser), filter);
 
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(chooser)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(chooser)) == GTK_RESPONSE_ACCEPT)
   {
     GSList *filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(chooser));
     g_slist_foreach(filenames, (GFunc)_import_preset_from_file, NULL);
@@ -1418,7 +1418,7 @@ static void export_preset(GtkButton *button,
 
   dt_conf_get_folder_to_file_chooser("ui_last/export_path", GTK_FILE_CHOOSER(filechooser));
 
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
   {
     gchar *filedir = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(filechooser));
 

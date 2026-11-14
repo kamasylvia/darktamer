@@ -375,7 +375,7 @@ static void _edit_preset_response(GtkDialog *dialog,
                                        GTK_FILE_CHOOSER(filechooser));
 
     // save if accepted
-    if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+    if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
     {
       char *filedir = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(filechooser));
       dt_presets_save_to_file(g->old_id, name, filedir);

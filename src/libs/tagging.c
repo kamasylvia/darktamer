@@ -2907,7 +2907,7 @@ static void _import_button_clicked(GtkButton *button,
   gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(filechooser), last_dirname);
   gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(filechooser), FALSE);
 
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
   {
     char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(filechooser));
     char *dirname = g_path_get_dirname(filename);
@@ -2950,7 +2950,7 @@ static void _export_button_clicked(GtkButton *button,
   gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(filechooser), last_dirname);
   gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(filechooser), export_filename);
 
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
   {
     char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(filechooser));
     char *dirname = g_path_get_dirname(filename);

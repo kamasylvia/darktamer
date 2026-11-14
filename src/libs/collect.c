@@ -483,7 +483,7 @@ static void _view_popup_menu_onSearchFilmroll(GSimpleAction *action,
     goto error;
 
   // run the dialog
-  if(gtk_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
+  if(dt_gui_native_dialog_run(GTK_NATIVE_DIALOG(filechooser)) == GTK_RESPONSE_ACCEPT)
   {
     gint id = -1;
     sqlite3_stmt *stmt;

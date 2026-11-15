@@ -3465,7 +3465,20 @@ int dt_exif_read_blob(uint8_t **buf,
     exifData["Exif.Image.YResolution"] = Exiv2::Rational(resolution, 1);
     exifData["Exif.Image.ResolutionUnit"] = uint16_t(2); // inches
 
-    exifData["Exif.Image.Software"] = darktable_package_string;
+    // Finder and friends show the Software tag as the image's "content
+    // creator": name the creator set in the metadata editor when there is
+    // one, and otherwise the fork's release rather than the raw build string
+    if(dt_is_valid_imgid(imgid))
+    {
+      GList *creator = dt_metadata_get_lock(imgid, "Xmp.dc.creator", NULL);
+      if(creator && creator->data)
+        exifData["Exif.Image.Software"] = (char *)creator->data;
+      else
+        exifData["Exif.Image.Software"] = darktamer_release;
+      g_list_free_full(creator, g_free);
+    }
+    else
+      exifData["Exif.Image.Software"] = darktamer_release;
 
     // TODO: Find a nice place for the missing metadata (tags,
     // publisher, colorlabels?). Additionally find out how to embed

@@ -75,6 +75,14 @@ void dt_iop_setup_binfo(const dt_dev_pixelpipe_iop_t *piece,
                         const float f_offset,
                         dt_iop_border_positions_t *binfo);
 
+// fork addition: the borders plugin publishes the rectangle its picture
+// occupies on the framed canvas here at load time (scale-1 output
+// coordinates, the space modify_roi_out describes). NULL while the borders
+// plugin is not loaded; the callback returns FALSE for a disabled instance
+// or one that adds no frame, so callers fall back to the whole image
+extern gboolean (*dt_iop_framing_picture_rect_hook)(const dt_dev_pixelpipe_iop_t *piece,
+                                                    dt_iop_roi_t *picture);
+
 // clang-format off
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent

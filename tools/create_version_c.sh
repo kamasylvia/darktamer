@@ -51,6 +51,10 @@ if [ $VERSION_C_NEEDS_UPDATE -eq 1 ]; then
     echo "  const char darktable_package_version[] = \"${NEW_VERSION}\";"
     echo "  const char darktable_package_string[] = PACKAGE_NAME \" ${NEW_VERSION}\";"
     echo "  const char darktable_last_commit_year[] = \"${LAST_COMMIT_YEAR}\";"
+    # the fork's release tag for user-visible version strings; falls back
+    # to the bare name between releases
+    DT_RELEASE="$(git describe --tags --match 'darktamer-*' --abbrev=0 2>/dev/null || echo darktamer)"
+    echo "  const char darktamer_release[] = \"${DT_RELEASE}\";"
     echo "#else"
     echo "  #define DT_MAJOR ${MAJOR_VERSION}"
     echo "  #define DT_MINOR ${MINOR_VERSION}"

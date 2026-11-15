@@ -2470,6 +2470,60 @@ void distort_mask(dt_iop_module_t *self,
   }
 }
 
+static gboolean _framing_picture_rect(const dt_dev_pixelpipe_iop_t *piece,
+                                      dt_iop_roi_t *picture)
+{
+  const dt_iop_borders_data_t *d = piece->data;
+  if(!d || !piece->enabled) return FALSE;
+
+  // piece->buf_in/buf_out hold the scale-1 full picture and canvas, as
+  // written by dt_dev_pixelpipe_get_dimensions(); an unchanged canvas
+  // means there is no frame to anchor against
+  const dt_iop_roi_t *const in = &piece->buf_in;
+  const dt_iop_roi_t *const out = &piece->buf_out;
+  if(out->width == in->width && out->height == in->height) return FALSE;
+
+  if(d->mode == DT_IOP_BORDERS_MODE_FILM)
+  {
+    _framing_film_geom_t G;
+    _framing_film_geom(&G, in->width, in->height, d);
+    picture->x = 0;
+    picture->y = MIN(G.band, out->height - in->height);
+  }
+  else if(d->mode == DT_IOP_BORDERS_MODE_BLUR)
+  {
+    int rows_w[FRAMING_MAX_ROWS] = { 0, 0, 0 }, rows_h[FRAMING_MAX_ROWS] = { 0, 0, 0 };
+    _framing_rows_plan_t plan;
+    _framing_plan_rows(&plan, in->width, in->height, d, &piece->pipe->image);
+    for(int r = 0; r < plan.n; r++) { rows_w[r] = plan.w[r]; rows_h[r] = plan.h[r]; }
+    const int n_rows = plan.n;
+    _framing_free_rows_plan(&plan);
+    _framing_layout_t L;
+    _framing_layout(&L, in->width, in->height, d, rows_w, rows_h, n_rows);
+    picture->x = CLAMP(L.main_left, 0, out->width - in->width);
+    picture->y = CLAMP(L.main_top, 0, out->height - in->height);
+  }
+  else
+  {
+    dt_iop_border_positions_t binfo;
+    dt_iop_setup_binfo(piece, in, out, d->pos_v, d->pos_h, d->color,
+                       d->frame_color, d->frame_size, d->frame_offset, &binfo);
+    picture->x = binfo.border_in_x;
+    picture->y = binfo.border_in_y;
+  }
+  picture->width = in->width;
+  picture->height = in->height;
+  picture->scale = 1.0f;
+  return TRUE;
+}
+
+// fork: publish the picture-rect query to libdarktable (watermark anchors
+// against it); the hook lives in develop/borders_helper.c
+__attribute__((constructor)) static void _framing_publish_picture_rect(void)
+{
+  dt_iop_framing_picture_rect_hook = _framing_picture_rect;
+}
+
 void modify_roi_out(dt_iop_module_t *self,
                     dt_dev_pixelpipe_iop_t *piece,
                     dt_iop_roi_t *roi_out,

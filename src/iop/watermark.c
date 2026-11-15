@@ -25,6 +25,7 @@
 #include "common/utility.h"
 #include "control/control.h"
 #include "develop/develop.h"
+#include "develop/borders_helper.h"
 #include "develop/imageop.h"
 #include "develop/imageop_gui.h"
 #include "dtgtk/button.h"
@@ -789,6 +790,32 @@ void process(dt_iop_module_t *self,
   //  width/height of current (possibly cropped) image
   const float iw = piece->buf_in.width;
   const float ih = piece->buf_in.height;
+
+  // fork: when a borders/framing instance runs earlier in the pipe, anchor
+  // to the picture area inside the frame instead of the whole canvas, so a
+  // position dialled in without a frame survives adding one. the rect is in
+  // the same scale-1 space as iw/ih (piece->buf_in)
+  float ax = 0.0f, ay = 0.0f, aw = iw, ah = ih;
+  for(GList *nodes = piece->pipe->nodes; nodes; nodes = g_list_next(nodes))
+  {
+    const dt_dev_pixelpipe_iop_t *const node = nodes->data;
+    if(node == piece) break; // only instances ahead of us in the pipe
+    if(node->enabled && node->module
+       && !strcmp(node->module->op, "borders"))
+    {
+      dt_iop_roi_t picture;
+      if(dt_iop_framing_picture_rect_hook
+         && dt_iop_framing_picture_rect_hook(node, &picture))
+      {
+        ax = picture.x;
+        ay = picture.y;
+        aw = picture.width;
+        ah = picture.height;
+        break;
+      }
+    }
+  }
+
   const float uscale = data->scale / 100.0f; // user scale, from GUI in percent
 
   // wbase, hbase are the base width and height, this is the
@@ -809,45 +836,45 @@ void process(dt_iop_module_t *self,
   switch (data->scale_base)
   {
     case DT_SCALE_MAINMENU_LARGER_BORDER:
-      sbase = wbase = hbase = (iw > ih) ? iw : ih;
+      sbase = wbase = hbase = (aw > ah) ? aw : ah;
       scale = sbase / larger;
       break;
     case DT_SCALE_MAINMENU_SMALLER_BORDER:
-      sbase = wbase = hbase = (iw < ih) ? iw : ih;
+      sbase = wbase = hbase = (aw < ah) ? aw : ah;
       scale = sbase / larger;
       break;
     case DT_SCALE_MAINMENU_MARKERHEIGHT:
-      wbase = iw;
-      sbase = hbase = ih;
+      wbase = aw;
+      sbase = hbase = ah;
       scale = sbase / dimension.height;
       break;
     case DT_SCALE_MAINMENU_ADVANCED:
-      wbase = iw;
-      hbase = ih;
+      wbase = aw;
+      hbase = ah;
       if(data->scale_img == DT_SCALE_IMG_WIDTH)
       {
-        sbase = iw;
+        sbase = aw;
         scale = (data->scale_svg == DT_SCALE_SVG_WIDTH)
           ? sbase / dimension.width
           : sbase / dimension.height;
       }
       else if(data->scale_img == DT_SCALE_IMG_HEIGHT)
       {
-        sbase = ih;
+        sbase = ah;
         scale = (data->scale_svg == DT_SCALE_SVG_WIDTH)
           ? sbase / dimension.width
           : sbase / dimension.height;
       }
       else if(data->scale_img == DT_SCALE_IMG_LARGER)
       {
-        sbase = (iw > ih) ? iw : ih;
+        sbase = (aw > ah) ? aw : ah;
         scale = (data->scale_svg == DT_SCALE_SVG_WIDTH)
           ? sbase / dimension.width
           : sbase / dimension.height;
       }
       else // data->scale_img == DT_SCALE_IMG_SMALLER
       {
-        sbase = (iw < ih) ? iw : ih;
+        sbase = (aw < ah) ? aw : ah;
         scale = (data->scale_svg == DT_SCALE_SVG_WIDTH)
           ? sbase / dimension.width
           : sbase / dimension.height;
@@ -858,12 +885,12 @@ void process(dt_iop_module_t *self,
     case DT_SCALE_MAINMENU_IMAGE:
     default:
       // in image mode, the wbase and hbase are just the image width and height
-      wbase = iw;
-      hbase = ih;
+      wbase = aw;
+      hbase = ah;
       if(dimension.width > dimension.height)
-        scale = iw / dimension.width;
+        scale = aw / dimension.width;
       else
-        scale = ih / dimension.height;
+        scale = ah / dimension.height;
   }
 
   scale *= roi_out->scale;
@@ -884,11 +911,11 @@ void process(dt_iop_module_t *self,
   switch (data->scale_base)
   {
     case DT_SCALE_MAINMENU_LARGER_BORDER:
-      svg_calc_base = ((iw > ih) ? iw : ih) * uscale;
+      svg_calc_base = ((aw > ah) ? aw : ah) * uscale;
       svg_calc_heightfromwidth = (dimension.width > dimension.height) ? TRUE : FALSE;
       break;
     case DT_SCALE_MAINMENU_SMALLER_BORDER:
-      svg_calc_base = ((iw < ih) ? iw : ih) * uscale;
+      svg_calc_base = ((aw < ah) ? aw : ah) * uscale;
       svg_calc_heightfromwidth = (dimension.width > dimension.height) ? TRUE : FALSE;
       break;
     case DT_SCALE_MAINMENU_MARKERHEIGHT:
@@ -908,12 +935,12 @@ void process(dt_iop_module_t *self,
       }
       else if(data->scale_img == DT_SCALE_IMG_LARGER)
       {
-        svg_calc_base = ((iw > ih) ? iw : ih) * uscale;
+        svg_calc_base = ((aw > ah) ? aw : ah) * uscale;
         svg_calc_heightfromwidth = (data->scale_svg == DT_SCALE_SVG_WIDTH) ? TRUE : FALSE;
       }
       else // data->scale_img == DT_SCALE_IMG_SMALLER
       {
-        svg_calc_base = ((iw < ih) ? iw : ih) * uscale;
+        svg_calc_base = ((aw < ah) ? aw : ah) * uscale;
         svg_calc_heightfromwidth = (data->scale_svg == DT_SCALE_SVG_WIDTH) ? TRUE : FALSE;
       }
       break;
@@ -1007,22 +1034,27 @@ void process(dt_iop_module_t *self,
   const float bX = bb_width / 2.0f - svg_width / 2.0f;
   const float bY = bb_height / 2.0f - svg_height / 2.0f;
 
-  // compute translation for the given alignment in image dimension
+  // compute translation for the given alignment in image dimension,
+  // against the anchor rect (the picture area when a frame precedes us)
 
   float ty = 0, tx = 0;
   if(data->alignment >= 0 && data->alignment < 3) // Align to verttop
     ty = bY;
   else if(data->alignment >= 3 && data->alignment < 6) // Align to vertcenter
-    ty = (ih / 2.0f) - (svg_height / 2.0f);
+    ty = (ah / 2.0f) - (svg_height / 2.0f);
   else if(data->alignment >= 6 && data->alignment < 9) // Align to vertbottom
-    ty = ih - svg_height - bY;
+    ty = ah - svg_height - bY;
 
   if(data->alignment == 0 || data->alignment == 3 || data->alignment == 6)
     tx = bX;
   else if(data->alignment == 1 || data->alignment == 4 || data->alignment == 7)
-    tx = (iw / 2.0f) - (svg_width / 2.0f);
+    tx = (aw / 2.0f) - (svg_width / 2.0f);
   else if(data->alignment == 2 || data->alignment == 5 || data->alignment == 8)
-    tx = iw - svg_width - bX;
+    tx = aw - svg_width - bX;
+
+  // shift the anchor itself (the picture origin inside the frame)
+  tx += ax;
+  ty += ay;
 
   // translate to position
   cairo_translate(cr, -roi_in->x, -roi_in->y);

@@ -230,6 +230,17 @@ changes (where available).
   recolored Darktamer aperture logo instead of the darktable one), and
   the toolbox about popup all carry the fork's own name and logo.
 
+- The watermark now follows the picture when a frame is added: if a
+  borders/framing instance runs earlier in the pipeline, the watermark
+  anchors to the picture area inside the frame instead of the whole
+  canvas, so a position dialled in without a frame survives adding one
+  (both position and size reference the picture).
+
+- Exported images no longer carry "darktable <build string>" as their
+  Software tag (what Finder shows as the content creator): it is now the
+  creator set in the metadata editor when there is one, and otherwise
+  the fork's own release name, e.g. "darktamer-0.0.3".
+
 - Added an interactive editing mode allowing users to correct a color
   by selecting it directly on the photo with the mouse wheel, just as
   was already possible with the "tone equalizer" module.

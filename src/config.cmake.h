@@ -14,6 +14,8 @@
 extern const char darktable_package_version[];
 extern const char darktable_package_string[];
 extern const char darktable_last_commit_year[];
+// the fork's own release tag, e.g. "darktamer-0.0.3" (no tag: "darktamer")
+extern const char darktamer_release[];
 
 static const char *dt_supported_extensions[] __attribute__((unused)) = {"@DT_SUPPORTED_EXTENSIONS_STRING@", NULL};
 

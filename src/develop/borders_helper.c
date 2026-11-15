@@ -19,6 +19,10 @@
 #include "common/darktable.h"
 #include "develop/borders_helper.h"
 
+// fork: filled in by the borders plugin at load time; see the header
+gboolean (*dt_iop_framing_picture_rect_hook)(const dt_dev_pixelpipe_iop_t *piece,
+                                             dt_iop_roi_t *picture) = NULL;
+
 // this will be called from inside an OpenMP parallel section, so no
 // need to parallelize further
 static inline void set_pixels(float *buf,

@@ -919,18 +919,18 @@ void process(dt_iop_module_t *self,
       svg_calc_heightfromwidth = (dimension.width > dimension.height) ? TRUE : FALSE;
       break;
     case DT_SCALE_MAINMENU_MARKERHEIGHT:
-      svg_calc_base = ih * uscale;
+      svg_calc_base = ah * uscale;
       svg_calc_heightfromwidth = FALSE;
       break;
     case DT_SCALE_MAINMENU_ADVANCED:
       if(data->scale_img == DT_SCALE_IMG_WIDTH)
       {
-        svg_calc_base = iw * uscale;
+        svg_calc_base = aw * uscale;
         svg_calc_heightfromwidth = (data->scale_svg == DT_SCALE_SVG_WIDTH) ? TRUE : FALSE;
       }
       else if(data->scale_img == DT_SCALE_IMG_HEIGHT)
       {
-        svg_calc_base = ih * uscale;
+        svg_calc_base = ah * uscale;
         svg_calc_heightfromwidth = (data->scale_svg == DT_SCALE_SVG_WIDTH) ? TRUE : FALSE;
       }
       else if(data->scale_img == DT_SCALE_IMG_LARGER)
@@ -950,12 +950,12 @@ void process(dt_iop_module_t *self,
     default:
       if(dimension.width > dimension.height)
       {
-        svg_calc_base = iw * uscale;
+        svg_calc_base = aw * uscale;
         svg_calc_heightfromwidth = TRUE;
       }
       else
       {
-        svg_calc_base = ih * uscale;
+        svg_calc_base = ah * uscale;
         svg_calc_heightfromwidth = FALSE;
       }
   }
